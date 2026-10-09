@@ -10,6 +10,8 @@ This project predicts **direction** (up or down), not price, and tests the answe
 - **Backtest with trading costs,** compared against buy-and-hold.
 - **Random-walk sanity check:** the same pipeline on pure-chance prices, to catch any leak of future information.
 
+For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the PROJECT_LOG.md.
+
 ## Results
 
 *Fill in after running the notebook: headline accuracy vs. "always up", backtest vs. buy-and-hold, and your one-paragraph conclusion.*
@@ -24,6 +26,7 @@ Stock_Movement_Predictor/
 │   └── evaluate.py     models, walk-forward testing, baselines, accuracy, backtest
 ├── notebooks/
 │   └── analysis.ipynb  the full analysis, start to finish
+├── PROJECT_LOG.md      decisions, results, issues and lessons, kept up to date
 └── requirements.txt
 ```
 

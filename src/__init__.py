@@ -1,0 +1,1 @@
+"""Stock direction predictor: data, features and honest evaluation."""

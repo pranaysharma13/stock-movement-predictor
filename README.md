@@ -27,7 +27,12 @@ Stock_Movement_Predictor/
 │   └── evaluate.py     models, walk-forward testing, baselines, accuracy, backtest, luck check
 ├── notebooks/
 │   └── analysis.ipynb  the full analysis, start to finish
+├── tests/              automated checks, run with `pytest`
+│   ├── test_data.py
+│   ├── test_features.py
+│   └── test_evaluate.py
 ├── PROJECT_LOG.md      decisions, results, issues and lessons, kept up to date
+├── pytest.ini          test settings
 └── requirements.txt
 ```
 
@@ -47,6 +52,7 @@ python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
+pytest                           # optional: check everything works (a few seconds)
 jupyter notebook notebooks/analysis.ipynb
 ```
 
@@ -80,6 +86,26 @@ prices = load_prices(TICKER, START, refresh=True)
 ```
 
 If you download while the US market is still open, today's row is left out automatically, because its price isn't final until the close (4 pm New York time).
+
+## Running the tests
+
+With the virtual environment active, from the project folder:
+
+```bash
+pytest
+```
+
+It takes a few seconds and needs no internet: every test runs on small fake price series. A green line of dots and "passed" means everything works; a failure names the test and shows what went wrong. Run it after any change to `src/`.
+
+What the tests check:
+
+| Test file | What it checks |
+|---|---|
+| `test_features.py` | No feature uses future prices; labels match the next day's real move; known values on a simple price series |
+| `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right and the planted pattern really reverses about 60% of the time |
+| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest and performance arithmetic match hand calculations; the luck check spots a perfect strategy; the pipeline finds the planted pattern and finds nothing in noise |
+
+The tests were checked by planting realistic bugs (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix): each one makes at least one test fail.
 
 ## Settings
 

@@ -1,6 +1,6 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 9 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
+*Last updated: 9 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
 
 ## Overview
 
@@ -8,7 +8,7 @@ Neither model predicts SPY's daily direction better than the simple rule "always
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily SPY prices from 2005 to today, 8 price-based features, two models (logistic regression and gradient boosting), walk-forward testing from 2010, compared against simple baselines and a backtest with trading costs.
-- **Status:** phase 1 (fixes) is built and checked on real SPY data. Phase 2 (automated tests) is next.
+- **Status:** phases 1 (fixes) and 2 (automated tests) are built; 31 tests pass. Phase 3 (any stock, auto-generated notebooks) is next.
 - **Code:** logic lives in `src/`; the analysis is told in `notebooks/analysis.ipynb`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -22,7 +22,7 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | What to predict | Direction: 1 if tomorrow's close is higher than today's, else 0 | A predicted-vs-actual price chart looks impressive even for a useless model, because tomorrow's price is always close to today's |
 | Data | SPY daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 4:30 pm New York time | One liquid fund with a long history; adjusted prices give the real return an investor got; an unfinished day's close isn't final |
 | Data caching | First run downloads and saves `data/SPY_from_2005-01-01.csv`; later runs load that file | Results stay the same between runs until you choose to refresh |
-| Project layout | Logic in `src/` (`data.py`, `features.py`, `evaluate.py`); one notebook tells the story | Clean, reusable code plus a readable report |
+| Project layout | Logic in `src/` (`data.py`, `features.py`, `evaluate.py`); one notebook tells the story; tests in `tests/` | Clean, reusable code plus a readable report |
 | Features | 8 calculated; the models use 5: `ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio` | One per idea (momentum, trend, risk, activity); `ret_10d`, `ret_20d` and `dist_ma10` nearly duplicate kept ones |
 | Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM comes in phase 5 |
 | Testing | Walk-forward: train on all years before the test year, predict it, step forward; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for SPY | Every prediction comes from a model that never saw that year; works for stocks with shorter histories |
@@ -31,6 +31,7 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Backtest | Hold the stock into tomorrow when the model says up, else cash; 0.1% cost per buy or sell; compared with buy-and-hold | Accuracy alone doesn't show whether a model would make money |
 | Luck check | The same number of cash days picked at random, 2,000 times; the random versions trade free | Shows whether a backtest edge could come from chance; free trading is generous to luck, so the test is strict |
 | Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
+| Automated tests | 31 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward and arithmetic bugs within seconds of saving a file |
 | Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
@@ -135,10 +136,11 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Fourteen issues so far: ten fixed or worked around, three planned for later phases, and one that turned out not to be a bug. Newest first.
+Fifteen issues so far: eleven fixed or worked around, three planned for later phases, and one that turned out not to be a bug. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 15 | While copying phase 1 into the project by hand, `walk_forward`'s first line stayed at the old version while its body was new, so every call would crash | 9 Oct 2026 | Fixed | Caught in review and fixed; phase 2's tests now catch it automatically (7 tests fail on that version) |
 | 14 | An earlier claim that every feature's correlation with tomorrow's return was close to zero; for `ret_1d` it is -0.10 | 9 Oct 2026 | Fixed | Corrected: -0.10 on all days but -0.03 without the most extreme 1% of days, so the effect lives in a few wild days |
 | 13 | First version of the luck check charged random cash days the same trading cost; scattered days trade far more, so random versions looked worse and gradient boosting looked "not luck" | 9 Oct 2026 | Fixed | Random versions now trade free, which is generous to luck and makes the test strict |
 | 12 | Only one stock runs at a time | 9 Oct 2026 | Proposed | Phase 3: `run.py`, a notebook per stock, a comparison table |
@@ -176,6 +178,8 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **A luck test has to be fair to luck.** The first luck check charged random strategies trading costs they wouldn't really pay, which made a bad model look skilled. When testing whether something beats chance, give chance every advantage.
 
+**Test the tests.** A test that never fails proves nothing. Each test was checked by planting a realistic bug in a copy of the code (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix, the old `walk_forward` line) and confirming at least one test failed.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
@@ -185,7 +189,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 ### Roadmap
 
 - [x] **Phase 1, fixes:** drop the unfinished trading day; trim to 5 features (all 8 kept available); first test year set automatically; planted-pattern test
-- [ ] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
+- [x] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
 - [ ] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
 - [ ] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
 - [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
@@ -234,6 +238,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 9 Oct 2026 | Phase 2 built | 31 `pytest` tests in `tests/` (data, features, evaluation); run in about 4 seconds without internet; each checked against planted bugs; README section and `pytest` in requirements |
+| 9 Oct 2026 | Phase 1 files reviewed | Local copies of `data.py`, `features.py` and `evaluate.py` checked line by line; one crash-causing mix-up in `walk_forward` found and fixed |
 | 9 Oct 2026 | Phase 1 built | Unfinished day dropped; 5 features (all 8 kept); automatic first test year; planted-pattern check; luck check added to the backtest; notebook and README updated; checked on the saved SPY CSV |
 | 9 Oct 2026 | Roadmap agreed | Seven phases; decisions recorded under Planned work |
 | 9 Oct 2026 | Project log added to the repo | `PROJECT_LOG.md`, linked from the README |

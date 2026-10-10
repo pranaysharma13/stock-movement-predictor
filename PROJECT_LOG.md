@@ -1,6 +1,6 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 9 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude*
+*Last updated: 9 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
 
 ## Overview
 
@@ -8,7 +8,7 @@ Neither model predicts SPY's daily direction better than the simple rule "always
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily SPY prices from 2005 to today, 8 price-based features, two models (logistic regression and gradient boosting), walk-forward testing from 2010, compared against simple baselines and a backtest with trading costs.
-- **Status:** the first full run on real SPY data is done. The next round of improvements is planned but not built yet.
+- **Status:** phase 1 (fixes) is built and checked on real SPY data. Phase 2 (automated tests) is next.
 - **Code:** logic lives in `src/`; the analysis is told in `notebooks/analysis.ipynb`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -20,17 +20,18 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Decision | Choice | Why |
 | --- | --- | --- |
 | What to predict | Direction: 1 if tomorrow's close is higher than today's, else 0 | A predicted-vs-actual price chart looks impressive even for a useless model, because tomorrow's price is always close to today's |
-| Data | SPY daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance | One liquid fund with a long history; adjusted prices give the real return an investor got |
+| Data | SPY daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 4:30 pm New York time | One liquid fund with a long history; adjusted prices give the real return an investor got; an unfinished day's close isn't final |
 | Data caching | First run downloads and saves `data/SPY_from_2005-01-01.csv`; later runs load that file | Results stay the same between runs until you choose to refresh |
 | Project layout | Logic in `src/` (`data.py`, `features.py`, `evaluate.py`); one notebook tells the story | Clean, reusable code plus a readable report |
-| Features | 8: returns over 1, 5, 10 and 20 days; distance from 10- and 50-day averages; 20-day volatility; volume vs its 20-day average | Momentum, trend, risk and activity, each using only data up to today's close |
-| Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM left as a stretch goal |
-| Testing | Walk-forward: train on 2005–2009, predict 2010; retrain on 2005–2010, predict 2011; and so on to today | Every prediction comes from a model that never saw that year |
+| Features | 8 calculated; the models use 5: `ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio` | One per idea (momentum, trend, risk, activity); `ret_10d`, `ret_20d` and `dist_ma10` nearly duplicate kept ones |
+| Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM comes in phase 5 |
+| Testing | Walk-forward: train on all years before the test year, predict it, step forward; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for SPY | Every prediction comes from a model that never saw that year; works for stocks with shorter histories |
 | Baselines | Coin flip, always up, repeat last move | Markets rise on about 55% of days, so "always up" is the real bar, not 50% |
 | Noise check | 95% range around each accuracy, plus a p-value against a coin flip | Shows whether a difference could be luck |
-| Backtest | Hold SPY into tomorrow when the model says up, else cash; 0.1% cost per buy or sell; compared with buy-and-hold | Accuracy alone doesn't show whether a model would make money |
-| Sanity check | The same pipeline on fake random-walk prices | If a model beats pure chance, the code is leaking future data |
-| Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices before delivery |
+| Backtest | Hold the stock into tomorrow when the model says up, else cash; 0.1% cost per buy or sell; compared with buy-and-hold | Accuracy alone doesn't show whether a model would make money |
+| Luck check | The same number of cash days picked at random, 2,000 times; the random versions trade free | Shows whether a backtest edge could come from chance; free trading is generous to luck, so the test is strict |
+| Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
+| Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
 
@@ -60,17 +61,48 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 
 ### Charts and smaller tables
 
+- **Feature correlation chart (section 2):** values near ±1 mean two features measure nearly the same thing; the five kept features stay at 0.58 or below.
+- **5 vs. 8 features (section 4):** if adding the three left-out features barely changes accuracy, they carried no extra information.
 - **Accuracy by year:** shows whether any edge is steady or comes from a few years. Look at which years are bad and what markets did then.
 - **Growth of $1:** the backtest as a picture, on a log scale so equal percentage moves look the same size.
 - **Cost table:** annual return at 0%, 0.05%, 0.1% and 0.2% per trade. An edge that only exists when trading is free isn't real.
-- **Random-walk table (section 6):** models should land near "Always up". Clearly beating it would mean a leak.
-- **Logistic regression weights (section 7):** positive pushes toward "up", negative toward "down". Overlapping features can share or cancel weight, so read single bars with care.
+- **Luck check (section 5):** "share of random >=" is how often random cash days did at least as well; about 0.05 or less is hard to explain by luck. The biggest days avoided and missed show whether a few extreme days drive the result.
+- **Pipeline checks (section 6):** on pure noise, models should land near "Always up"; on the planted pattern, both should show True in "beats always-up?".
+- **Logistic regression weights (section 7):** positive pushes toward "up", negative toward "down". With five non-overlapping features, each bar can be read on its own.
 
 ## Results so far
 
-On SPY from January 2010 to October 2026 (about 4,200 test days), no model beat "always up", and only buy-and-hold made strong money after costs. Run locally on 9 October 2026; Claude reproduced the same numbers from the saved CSV.
+No model beats "always up" on accuracy. After phase 1, logistic regression edges past buy-and-hold in the backtest, but the edge is borderline luck and rests on a few crash days. Phase 1 results come first; version 1 results (8 features) are kept below for comparison.
 
-### Accuracy
+### After phase 1 (5 features, unfinished day removed)
+
+Run on the saved SPY CSV on 9 October 2026; test period 4 January 2010 to 7 October 2026 (4,216 days).
+
+| Method | Accuracy | 95% range | Predicted up | Beats always-up? |
+| --- | --- | --- | --- | --- |
+| Always up | 55.2% | 53.7–56.7% | 100% | — |
+| Logistic regression | 55.1% | 53.6–56.6% | 98.5% | No |
+| Gradient boosting | 52.8% | 51.3–54.3% | 78.3% | No (worse) |
+
+Adding the three left-out features back changes accuracy by 0.1 points or less, as expected.
+
+| Strategy (0.1% cost per trade) | Annual return | Sharpe ratio | Max drawdown | Cash days | Trades | Share of random cash days doing as well |
+| --- | --- | --- | --- | --- | --- | --- |
+| Buy and hold | 14.2% | 0.86 | -33.7% | 0 | 1 | — |
+| Logistic regression | 14.9% | 0.93 | -26.7% | 64 | 97 | 0.048 |
+| Gradient boosting | 5.4% | 0.43 | -27.4% | 916 | 1,110 | 0.999 |
+
+- Logistic regression now edges past buy-and-hold, but treat it as a lead, not a finding. Random cash days do as well about 1 time in 20, and one day, the 16 March 2020 crash (-10.9%), supplies more than half of the gain. With all 8 features, the same model lost to buy-and-hold (13.3%).
+- Its 64 cash days cluster in market crises: 2010–2011, 2020, 2022 and 2025. Phase 3 (other stocks) and phase 6 (future data) will test whether this holds up.
+- Gradient boosting does worse than random: 99.9% of random choices of its 916 cash days did better.
+
+### After phase 1: pipeline checks
+
+- **Random walk:** both models scored about 48.9%, below "always up" (50.3%). Nothing found, as it should be.
+- **Planted pattern:** logistic regression 59.3% and gradient boosting 58.1%, against 49.6% for "always up". Both found the pattern, well beyond noise.
+- **Yesterday vs. tomorrow:** the correlation between yesterday's return and tomorrow's is -0.10 on all days, but only -0.03 without the most extreme 1% of days. The small reversal tendency lives mostly in a few wild days.
+
+### Version 1 (8 features): accuracy
 
 | Method | Accuracy | 95% range | Predicted up | Beats always-up? |
 | --- | --- | --- | --- | --- |
@@ -84,7 +116,7 @@ On SPY from January 2010 to October 2026 (about 4,200 test days), no model beat 
 - Gradient boosting's whole range sits below "always up": it acted on patterns that didn't hold in later years.
 - The worst years for every method were 2015, 2018 and 2022, all years with sharp market falls. The models saw none of them coming.
 
-### Backtest (0.1% cost per trade)
+### Version 1: backtest (0.1% cost per trade)
 
 | Strategy | Annual return | Sharpe ratio | Max drawdown | Days in market | Trades |
 | --- | --- | --- | --- | --- | --- |
@@ -96,27 +128,29 @@ On SPY from January 2010 to October 2026 (about 4,200 test days), no model beat 
 - Gradient boosting earned only 10.9% a year even with free trading: sitting out 23% of days missed too many up days.
 - Logistic regression's smaller drawdown is interesting but not convincing; it was out of the market only about 100 days.
 
-### Checks
+### Version 1: checks
 
 - **Random walk:** both models scored 49–50% on fake prices, inside the noise range and not above "always up" (50.3%). No sign of leaked future data.
 - **Logistic regression weights:** negative on recent returns (`ret_1d`, `ret_5d`, `ret_10d`), large positive on `dist_ma10`. These features overlap heavily, so the weights partly cancel, and all are small: each shifts the predicted chance of "up" by only 2–3 points.
 
 ## Issue tracker
 
-Twelve issues so far: five fixed or worked around, five fixes proposed, one open decision, and one that turned out not to be a bug. Newest first.
+Fourteen issues so far: ten fixed or worked around, three planned for later phases, and one that turned out not to be a bug. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
-| 12 | Only one stock runs at a time, and the first test year is fixed at 2010, which fails for stocks listed later | 9 Oct 2026 | Proposed | `run_ticker()` plus a comparison table; first test year set to five years after a stock's data begins |
-| 11 | Testing many stocks will produce a few lucky "winners" by chance alone | 9 Oct 2026 | Proposed | A warning in the comparison table |
-| 10 | The random-walk check proves the code doesn't invent an edge, but not that it would find a real one | 9 Oct 2026 | Proposed | Planted-pattern test: fake prices with a built-in pattern the models should detect |
-| 9 | The last row of downloaded data was an unfinished trading day (9 Oct 2026, volume 14.3M vs about 43M normally), so the 8 Oct label used an unsettled price | 9 Oct 2026 | Proposed | Drop today's row when downloading |
-| 8 | Overlapping features (correlation up to 0.91) make logistic regression's weights unreadable | 9 Oct 2026 | Proposed | Trim to 5 features (`ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio`); keep the full set for comparison |
-| 7 | No LSTM was built, although the reference repo uses one | 9 Oct 2026 | Open | Decide: add this round or later, judged by the same tests |
-| 6 | Neither model beats "always up" | 9 Oct 2026 | Not a bug | The finding, not a bug: the data holds no usable signal. The random-walk check passed |
+| 14 | An earlier claim that every feature's correlation with tomorrow's return was close to zero; for `ret_1d` it is -0.10 | 9 Oct 2026 | Fixed | Corrected: -0.10 on all days but -0.03 without the most extreme 1% of days, so the effect lives in a few wild days |
+| 13 | First version of the luck check charged random cash days the same trading cost; scattered days trade far more, so random versions looked worse and gradient boosting looked "not luck" | 9 Oct 2026 | Fixed | Random versions now trade free, which is generous to luck and makes the test strict |
+| 12 | Only one stock runs at a time | 9 Oct 2026 | Proposed | Phase 3: `run.py`, a notebook per stock, a comparison table |
+| 11 | Testing many stocks will produce a few lucky "winners" by chance alone | 9 Oct 2026 | Proposed | Phase 3: a warning in the comparison table |
+| 10 | The random-walk check proves the code doesn't invent an edge, but not that it would find a real one | 9 Oct 2026 | Fixed | Planted-pattern check added (phase 1): both models find a 60% reversal pattern |
+| 9 | The last row of downloaded data was an unfinished trading day (9 Oct 2026, volume 14.3M vs about 43M normally), so the 8 Oct label used an unsettled price | 9 Oct 2026 | Fixed | Phase 1: today's row is dropped if downloaded before 4:30 pm New York time, including in existing saved files |
+| 8 | Overlapping features (correlation up to 0.91) made logistic regression's weights unreadable; the first test year was fixed at 2010 | 9 Oct 2026 | Fixed | Phase 1: models use 5 features (all 8 still available); first test year chosen automatically |
+| 7 | No LSTM was built, although the reference repo uses one | 9 Oct 2026 | Proposed | Phase 5, on request only (`RUN_LSTM` switch) |
+| 6 | Neither model beats "always up" | 9 Oct 2026 | Not a bug | The finding, not a bug: the data holds no usable signal. Both pipeline checks pass |
 | 5 | Folder name with spaces needs quotes in Terminal and can break the `jupyter` command | 9 Oct 2026 | Fixed | Renamed to `Stock_Movement_Predictor`; README updated |
 | 4 | `.ipynb` files can't be previewed in the Claude app | 9 Oct 2026 | Workaround | Full notebook pasted in chat; open it in Jupyter or VS Code |
-| 3 | Claude's workspace can't reach Yahoo Finance | 9 Oct 2026 | Workaround | Code tested on fake prices shaped like yfinance output; real runs on my Mac |
+| 3 | Claude's workspace can't reach Yahoo Finance | 9 Oct 2026 | Workaround | Code tested on fake prices and the saved SPY CSV; real runs on my Mac |
 | 2 | The backtest's trades column showed as decimals (1302.0000) | 9 Oct 2026 | Fixed | Stored as whole numbers |
 | 1 | Time-zone-aware dates from yfinance shifted to 05:00 UTC | 9 Oct 2026 | Fixed | Keep the local trading date |
 
@@ -138,32 +172,41 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **The limit is the information, not the model.** An LSTM or a bigger network can't find a signal that isn't in the data. Better predictions come from changing what you predict (for example, how big tomorrow's move will be, which is far more predictable than its direction) or what information you use.
 
+**A small edge can live in a few extreme days.** Yesterday's return correlates -0.10 with tomorrow's, but that almost vanishes without the wildest 1% of days. Logistic regression's backtest gain also rests mostly on one crash day in March 2020. Always ask which days drive a result.
+
+**A luck test has to be fair to luck.** The first luck check charged random strategies trading costs they wouldn't really pay, which made a bad model look skilled. When testing whether something beats chance, give chance every advantage.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
 
-The next round is planned but not built yet.
+The roadmap is agreed: seven phases, built in order, each ending with the changed files, this log updated and a local run.
 
-### Next round (proposed)
+### Roadmap
 
-- [ ] Drop the unfinished trading day when downloading
-- [ ] Run any list of stocks with one comparison table, first test year set automatically
-- [ ] Trim to 5 non-overlapping features, keeping the full set for comparison
-- [ ] Add a warning about lucky winners when testing many stocks
-- [ ] Planted-pattern test: prove the pipeline finds a real pattern when one exists
-- [ ] New section: predict big vs. small moves instead of up vs. down
+- [x] **Phase 1, fixes:** drop the unfinished trading day; trim to 5 features (all 8 kept available); first test year set automatically; planted-pattern test
+- [ ] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
+- [ ] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
+- [ ] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
+- [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
+- [ ] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's
+- [ ] **Phase 7, write-up:** result charts in the README; Conclusions written
+
+### Decisions
+
+| Question | Decision |
+| --- | --- |
+| LSTM in every report? | No, on request: `RUN_LSTM = True` at the top of the template |
+| Run tests automatically on GitHub? | No; tests run locally with `pytest` |
+| What the live forward test tracks | All four stocks; logistic regression for direction plus the volatility model chosen in phase 4; no LSTM |
+| Google ticker | `GOOGL` (class A shares) |
+| Known bias | NVDA, AAPL and GOOGL were picked knowing they became huge winners; the reports will say buy-and-hold looks good partly in hindsight |
 
 ### My own tasks
 
-- [ ] Write the Conclusions section of the notebook, then copy it into the README's Results section
 - [ ] Experiment: `LogisticRegression(max_iter=1000, class_weight="balanced")` in `src/evaluate.py`; guess the outcome before running
 - [ ] Experiment: trade only when the model is confident, e.g. `prob_up > 0.55`
-
-### Open decisions
-
-- Go-ahead on the next round above.
-- LSTM: add it this round or after the next round?
-- Later, maybe: longer horizons and comparing stocks against each other (monthly momentum), a bigger change to the project.
+- [ ] Write the Conclusions (phase 7)
 
 ## Glossary
 
@@ -191,11 +234,13 @@ The next round is planned but not built yet.
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 9 Oct 2026 | Phase 1 built | Unfinished day dropped; 5 features (all 8 kept); automatic first test year; planted-pattern check; luck check added to the backtest; notebook and README updated; checked on the saved SPY CSV |
+| 9 Oct 2026 | Roadmap agreed | Seven phases; decisions recorded under Planned work |
 | 9 Oct 2026 | Project log added to the repo | `PROJECT_LOG.md`, linked from the README |
 | 9 Oct 2026 | GitHub prep | `.gitignore` now also skips macOS `.DS_Store` files |
 | 9 Oct 2026 | README: returning-session commands | Added "Every time you come back", "When you're done" and "Getting the latest prices"; first-time setup now uses `python3` for Mac |
 | 9 Oct 2026 | Project log created | This document |
-| 9 Oct 2026 | Next round proposed | Six items, listed under Planned work |
+| 9 Oct 2026 | Next round proposed | Six items, later folded into the roadmap |
 | 9 Oct 2026 | Results reproduced from the saved CSV | Same numbers as the local run; found the unfinished-day issue and the feature overlap |
 | 9 Oct 2026 | First real run on SPY | Run locally; results under Results so far |
 | 9 Oct 2026 | README updated | Folder renamed to `Stock_Movement_Predictor` |

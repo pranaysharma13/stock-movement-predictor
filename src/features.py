@@ -11,17 +11,31 @@ forward: did the price rise from day t's close to day t+1's close?
 import numpy as np
 import pandas as pd
 
-FEATURES = [
+
+# Every feature make_features() calculates.
+ALL_FEATURES = [
     "ret_1d", "ret_5d", "ret_10d", "ret_20d",
     "dist_ma10", "dist_ma50",
     "vol_20d",
     "volume_ratio",
 ]
 
+# The ones the models use: one per idea, so no two measure nearly the same thing.
+# Left out because they overlap with a kept feature (correlation on SPY 2005-2026):
+#   dist_ma10 ~ ret_5d (0.91), ret_20d ~ dist_ma50 (0.86), ret_10d ~ both windows (0.67-0.82)
+FEATURES = [
+    "ret_1d",        # yesterday's move
+    "ret_5d",        # the last week
+    "dist_ma50",     # the longer-term trend
+    "vol_20d",       # risk
+    "volume_ratio",  # activity
+]
+
 
 
 def make_features(prices):
-    """One row per day, one column per feature (see FEATURES)."""
+    """One row per day, one column per feature (see ALL_FEATURES)."""
+
     close = prices["Close"]
     volume = prices["Volume"]
     daily_ret = close / close.shift(1) - 1
@@ -58,6 +72,7 @@ def build_dataset(prices):
     Rows with missing values are dropped: the first ~50 days, while the
     moving averages warm up, and the last day, which has no tomorrow yet.
     """
+
     data = make_features(prices)
     close = prices["Close"]
     data["next_ret"] = close.shift(-1) / close - 1

@@ -8,9 +8,10 @@ This project predicts **direction** (up or down), not price, and tests the answe
 - **Real baselines:** models must beat "always predict up," not just a coin flip.
 - **Noise check:** every accuracy comes with a 95% range.
 - **Backtest with trading costs,** compared against buy-and-hold.
-- **Random-walk sanity check:** the same pipeline on pure-chance prices, to catch any leak of future information.
+- **Luck check:** any backtest edge is compared with sitting out the same number of random days.
+- **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
 
-For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the PROJECT_LOG.md.
+For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
 
 ## Results
 
@@ -21,9 +22,9 @@ For the full story (decisions, how to read every output, results, issues found a
 ```
 Stock_Movement_Predictor/
 ├── src/
-│   ├── data.py         download and cache prices; fake random-walk prices
+│   ├── data.py         download and cache prices; fake prices for the pipeline checks
 │   ├── features.py     features (returns, moving averages, volatility, volume) and label
-│   └── evaluate.py     models, walk-forward testing, baselines, accuracy, backtest
+│   └── evaluate.py     models, walk-forward testing, baselines, accuracy, backtest, luck check
 ├── notebooks/
 │   └── analysis.ipynb  the full analysis, start to finish
 ├── PROJECT_LOG.md      decisions, results, issues and lessons, kept up to date
@@ -78,7 +79,7 @@ The saved data in `data/` doesn't update by itself. To pull the newest days, eit
 prices = load_prices(TICKER, START, refresh=True)
 ```
 
-Download after the US market closes (4 pm New York time) so today's price is final.
+If you download while the US market is still open, today's row is left out automatically, because its price isn't final until the close (4 pm New York time).
 
 ## Settings
 
@@ -88,17 +89,22 @@ At the top of the notebook:
 |---|---|---|
 | `TICKER` | `"SPY"` | Any Yahoo Finance symbol |
 | `START` | `"2005-01-01"` | First date of data |
-| `FIRST_TEST_YEAR` | `2010` | First year predicted; earlier years are only for training |
+| `FIRST_TEST_YEAR` | `None` | First year predicted; `None` picks the first year with about 4 years of history before it (2010 for SPY) |
 | `COST` | `0.001` | Cost per buy or sell in the backtest (0.1%) |
 
 ## Features
 
+The models use five features, one per idea:
+
 | Feature | Meaning |
 |---|---|
-| `ret_1d`, `ret_5d`, `ret_10d`, `ret_20d` | Return over the last 1, 5, 10, 20 days |
-| `dist_ma10`, `dist_ma50` | Distance of price from its 10- and 50-day average |
+| `ret_1d` | Return over the last day |
+| `ret_5d` | Return over the last 5 days |
+| `dist_ma50` | Distance of price from its 50-day average |
 | `vol_20d` | Standard deviation of daily returns over 20 days |
 | `volume_ratio` | Today's volume vs. its 20-day average |
+
+Three more are calculated but left out because they nearly duplicate a kept one: `ret_10d`, `ret_20d` and `dist_ma10`. The notebook shows the overlap and checks that adding them back doesn't help.
 
 ## Limitations
 

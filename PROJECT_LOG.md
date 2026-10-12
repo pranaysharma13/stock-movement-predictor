@@ -1,15 +1,15 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 9 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
+*Last updated: 12 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
 
 ## Overview
 
 Neither model predicts SPY's daily direction better than the simple rule "always predict up", and our checks show the reason is the data, not the code: past prices hold no usable signal for tomorrow's direction.
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
-- **Approach:** daily SPY prices from 2005 to today, 8 price-based features, two models (logistic regression and gradient boosting), walk-forward testing from 2010, compared against simple baselines and a backtest with trading costs.
-- **Status:** phases 1 (fixes) and 2 (automated tests) are built; 31 tests pass. Phase 3 (any stock, auto-generated notebooks) is next.
-- **Code:** logic lives in `src/`; the analysis is told in `notebooks/analysis.ipynb`.
+- **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; 5 price-based features; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
+- **Status:** phases 1–3 are built: fixes, 46 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Next: phase 4 (volatility).
+- **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
 
@@ -20,18 +20,23 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Decision | Choice | Why |
 | --- | --- | --- |
 | What to predict | Direction: 1 if tomorrow's close is higher than today's, else 0 | A predicted-vs-actual price chart looks impressive even for a useless model, because tomorrow's price is always close to today's |
-| Data | SPY daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 4:30 pm New York time | One liquid fund with a long history; adjusted prices give the real return an investor got; an unfinished day's close isn't final |
-| Data caching | First run downloads and saves `data/SPY_from_2005-01-01.csv`; later runs load that file | Results stay the same between runs until you choose to refresh |
-| Project layout | Logic in `src/` (`data.py`, `features.py`, `evaluate.py`); one notebook tells the story; tests in `tests/` | Clean, reusable code plus a readable report |
+| Data | Daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 4:30 pm New York time | Adjusted prices give the real return an investor got; an unfinished day's close isn't final |
+| Stocks | SPY, NVDA, AAPL, GOOGL; any Yahoo Finance symbol works | One broad fund plus three single stocks |
+| Data caching | First run of each stock downloads and saves `data/<TICKER>_from_2005-01-01.csv`; later runs load that file | Results stay the same between runs until you choose to refresh |
+| Project layout | Logic in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` fills it in and saves `reports/<TICKER>.ipynb`; tests in `tests/` | One template means every stock gets exactly the same analysis, and later phases appear in every report automatically |
+| Running reports | `python run.py SPY NVDA AAPL GOOGL` runs each report with papermill, then the comparison; a failed ticker doesn't stop the others | One command instead of editing and re-running a notebook per stock |
+| Reports on GitHub | Yes, saved with all tables and charts; price data stays out | Visitors see results without running anything |
 | Features | 8 calculated; the models use 5: `ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio` | One per idea (momentum, trend, risk, activity); `ret_10d`, `ret_20d` and `dist_ma10` nearly duplicate kept ones |
 | Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM comes in phase 5 |
-| Testing | Walk-forward: train on all years before the test year, predict it, step forward; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for SPY | Every prediction comes from a model that never saw that year; works for stocks with shorter histories |
-| Baselines | Coin flip, always up, repeat last move | Markets rise on about 55% of days, so "always up" is the real bar, not 50% |
-| Noise check | 95% range around each accuracy, plus a p-value against a coin flip | Shows whether a difference could be luck |
+| Testing | Walk-forward: train on all years before the test year, predict it, step forward; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for these stocks | Every prediction comes from a model that never saw that year; works for stocks with shorter histories |
+| Baselines | Coin flip, always up, repeat last move | Stocks rise on more than half of days, so "always up" is the real bar, not 50% |
+| Noise check | 95% range around each accuracy, a p-value against a coin flip, and (in the summary) a p-value against "always up" | Shows whether a difference could be luck |
 | Backtest | Hold the stock into tomorrow when the model says up, else cash; 0.1% cost per buy or sell; compared with buy-and-hold | Accuracy alone doesn't show whether a model would make money |
 | Luck check | The same number of cash days picked at random, 2,000 times; the random versions trade free | Shows whether a backtest edge could come from chance; free trading is generous to luck, so the test is strict |
+| Lucky-winners correction | In the comparison, a result must pass at 5% divided by the number of comparisons (Bonferroni); 4 stocks × 2 models = 8, so 0.63% | With 8 comparisons at 5%, about 0.4 pass by luck alone |
+| Hindsight note | Every report says how much $1 grew and warns that well-known winners look good partly in hindsight | NVDA, AAPL and GOOGL were picked knowing how they turned out |
 | Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
-| Automated tests | 31 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward and arithmetic bugs within seconds of saving a file |
+| Automated tests | 46 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
 | Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
@@ -71,9 +76,21 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 - **Pipeline checks (section 6):** on pure noise, models should land near "Always up"; on the planted pattern, both should show True in "beats always-up?".
 - **Logistic regression weights (section 7):** positive pushes toward "up", negative toward "down". With five non-overlapping features, each bar can be read on its own.
 
+### Comparison report (`reports/comparison.ipynb`)
+
+| Part | What it shows | What to look for |
+| --- | --- | --- |
+| Test periods | Each stock's test dates, "always up" accuracy and buy-and-hold return | Stocks with shorter histories start testing later |
+| Edge chart | Each model's accuracy minus "always up", with its 95% range | A range crossing zero means the edge could be luck |
+| p-value vs always up | Chance of an accuracy this high if the model were no better than "always up" | Small is good, but see the corrected column |
+| 5% vs corrected columns | Whether a result passes as a single test, and after dividing 5% by the number of comparisons | Only corrected passes count as evidence |
+| Luck count | How many passes luck alone would produce, next to the actual passes | Passes close to the luck count mean nothing |
+
 ## Results so far
 
 No model beats "always up" on accuracy. After phase 1, logistic regression edges past buy-and-hold in the backtest, but the edge is borderline luck and rests on a few crash days. Phase 1 results come first; version 1 results (8 features) are kept below for comparison.
+
+NVDA, AAPL and GOOGL results come from the reports in [`reports/`](reports/); start with [`reports/comparison.ipynb`](reports/comparison.ipynb).
 
 ### After phase 1 (5 features, unfinished day removed)
 
@@ -136,15 +153,17 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Fifteen issues so far: eleven fixed or worked around, three planned for later phases, and one that turned out not to be a bug. Newest first.
+Seventeen issues so far: fifteen fixed or worked around, one planned for a later phase, and one that turned out not to be a bug. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 17 | The comparison chart's legend covered the GOOGL gradient-boosting point | 12 Oct 2026 | Fixed | Legend moved below the chart; found by rendering the chart and looking at it |
+| 16 | A comment on the same line as `FIRST_TEST_YEAR = None` in the settings cell made papermill print "Unable to parse line 4" on every run | 12 Oct 2026 | Fixed | Comments moved to their own lines |
 | 15 | While copying phase 1 into the project by hand, `walk_forward`'s first line stayed at the old version while its body was new, so every call would crash | 9 Oct 2026 | Fixed | Caught in review and fixed; phase 2's tests now catch it automatically (7 tests fail on that version) |
 | 14 | An earlier claim that every feature's correlation with tomorrow's return was close to zero; for `ret_1d` it is -0.10 | 9 Oct 2026 | Fixed | Corrected: -0.10 on all days but -0.03 without the most extreme 1% of days, so the effect lives in a few wild days |
 | 13 | First version of the luck check charged random cash days the same trading cost; scattered days trade far more, so random versions looked worse and gradient boosting looked "not luck" | 9 Oct 2026 | Fixed | Random versions now trade free, which is generous to luck and makes the test strict |
-| 12 | Only one stock runs at a time | 9 Oct 2026 | Proposed | Phase 3: `run.py`, a notebook per stock, a comparison table |
-| 11 | Testing many stocks will produce a few lucky "winners" by chance alone | 9 Oct 2026 | Proposed | Phase 3: a warning in the comparison table |
+| 12 | Only one stock runs at a time | 9 Oct 2026 | Fixed | Phase 3: `python run.py` creates a report per stock from one template |
+| 11 | Testing many stocks will produce a few lucky "winners" by chance alone | 9 Oct 2026 | Fixed | Phase 3: the comparison shows passes at 5% and after the Bonferroni correction, next to the number luck would produce |
 | 10 | The random-walk check proves the code doesn't invent an edge, but not that it would find a real one | 9 Oct 2026 | Fixed | Planted-pattern check added (phase 1): both models find a 60% reversal pattern |
 | 9 | The last row of downloaded data was an unfinished trading day (9 Oct 2026, volume 14.3M vs about 43M normally), so the 8 Oct label used an unsettled price | 9 Oct 2026 | Fixed | Phase 1: today's row is dropped if downloaded before 4:30 pm New York time, including in existing saved files |
 | 8 | Overlapping features (correlation up to 0.91) made logistic regression's weights unreadable; the first test year was fixed at 2010 | 9 Oct 2026 | Fixed | Phase 1: models use 5 features (all 8 still available); first test year chosen automatically |
@@ -160,7 +179,7 @@ Fifteen issues so far: eleven fixed or worked around, three planned for later ph
 
 The biggest lesson so far: when a model predicts badly, first ask whether the code is broken or whether there is simply nothing to learn.
 
-**"Not learning" is different from "broken".** A metal detector on a beach with no metal stays silent, and that doesn't mean it's faulty. The random-walk check showed the code doesn't invent an edge. The planted-pattern test (proposed) will show it can find a real one.
+**"Not learning" is different from "broken".** A metal detector on a beach with no metal stays silent, and that doesn't mean it's faulty. The random-walk check showed the code doesn't invent an edge. The planted-pattern check showed it can find a real one.
 
 **Beating a coin flip proves nothing.** Markets rise on about 55% of days, so "always up" beats a coin flip without knowing anything. Every model also "beat" the coin flip, with p-values near zero.
 
@@ -180,6 +199,8 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **Test the tests.** A test that never fails proves nothing. Each test was checked by planting a realistic bug in a copy of the code (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix, the old `walk_forward` line) and confirming at least one test failed.
 
+**The more you test, the stricter the bar.** At the 5% level, 1 test in 20 passes by luck. With 4 stocks and 2 models, that's 8 chances, so about 0.4 lucky passes are expected before anything real happens. SPY's borderline backtest result (luck share 0.048) passes at 5% but not at the corrected 0.63%.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
@@ -190,7 +211,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 - [x] **Phase 1, fixes:** drop the unfinished trading day; trim to 5 features (all 8 kept available); first test year set automatically; planted-pattern test
 - [x] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
-- [ ] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
+- [x] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
 - [ ] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
 - [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
 - [ ] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's
@@ -219,7 +240,9 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Adjusted prices | Prices corrected for dividends and splits, so day-to-day changes are the real return |
 | Backtest | Replaying a trading rule on past data to see what it would have earned |
 | Baseline | A simple rule a model must beat to show it learned something |
+| Bonferroni correction | Dividing the 5% threshold by the number of comparisons, so that testing many things doesn't produce lucky "wins" |
 | Feature | An input to the model, such as the last 5 days' return |
+| Hindsight bias | Judging a choice by an outcome nobody could know at the time, such as picking stocks that are famous winners today |
 | Label (target) | What the model predicts: 1 for an up day tomorrow, 0 otherwise |
 | Leak (look-ahead) | Future information slipping into features or training, which makes results look better than they could be in real life |
 | LSTM | A neural network built for sequences; needs PyTorch or TensorFlow |
@@ -227,6 +250,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Multicollinearity | Features that move together, so a model can split or cancel weight between them |
 | Overfitting | A model fitting noise in the training data that doesn't repeat later |
 | p-value | Chance of a result at least this good from pure luck |
+| papermill | A tool that fills in a notebook's settings cell and runs every cell, saving the result |
 | Random walk | Prices where every day's move is pure chance |
 | scikit-learn | The Python library that provides the models and data-preparation tools |
 | Sharpe ratio | Return per unit of volatility; higher is better |
@@ -238,6 +262,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 12 Oct 2026 | Phase 3 built | `notebooks/template.ipynb` replaces `analysis.ipynb`; `run.py` creates `reports/<TICKER>.ipynb` per stock and `reports/comparison.ipynb`; `src/report.py` for summaries and the Bonferroni-corrected comparison; hindsight note in every report; 15 new tests (46 total); checked end to end on the saved SPY data plus fake NVDA, AAPL, GOOGL and a short-history stock; `papermill` added to requirements |
 | 9 Oct 2026 | Phase 2 built | 31 `pytest` tests in `tests/` (data, features, evaluation); run in about 4 seconds without internet; each checked against planted bugs; README section and `pytest` in requirements |
 | 9 Oct 2026 | Phase 1 files reviewed | Local copies of `data.py`, `features.py` and `evaluate.py` checked line by line; one crash-causing mix-up in `walk_forward` found and fixed |
 | 9 Oct 2026 | Phase 1 built | Unfinished day dropped; 5 features (all 8 kept); automatic first test year; planted-pattern check; luck check added to the backtest; notebook and README updated; checked on the saved SPY CSV |

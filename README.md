@@ -1,6 +1,6 @@
 # Stock Direction Predictor
 
-Can a machine learning model predict whether the S&P 500 (SPY) closes higher tomorrow, better than simple rules can?
+Can a machine learning model predict whether a stock closes higher tomorrow, better than simple rules can? Tested on SPY (the S&P 500), NVDA, AAPL and GOOGL, and runnable for any stock with one command.
 
 This project predicts **direction** (up or down), not price, and tests the answer honestly:
 
@@ -10,33 +10,38 @@ This project predicts **direction** (up or down), not price, and tests the answe
 - **Backtest with trading costs,** compared against buy-and-hold.
 - **Luck check:** any backtest edge is compared with sitting out the same number of random days.
 - **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
+- **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar, because some will "win" by chance alone.
 
 For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
 
 ## Results
 
-*Fill in after running the notebook: headline accuracy vs. "always up", backtest vs. buy-and-hold, and your one-paragraph conclusion.*
+*Fill in after running the reports: headline accuracy vs. "always up", backtest vs. buy-and-hold, and your one-paragraph conclusion.* The reports are in [`reports/`](reports/); start with [`reports/comparison.ipynb`](reports/comparison.ipynb).
 
 ## Project structure
 
 ```
 Stock_Movement_Predictor/
+├── run.py                       one command to create the reports
 ├── src/
-│   ├── data.py         download and cache prices; fake prices for the pipeline checks
-│   ├── features.py     features (returns, moving averages, volatility, volume) and label
-│   └── evaluate.py     models, walk-forward testing, baselines, accuracy, backtest, luck check
+│   ├── data.py                  download and cache prices; fake prices for the pipeline checks
+│   ├── features.py              features (returns, moving averages, volatility, volume) and label
+│   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
+│   └── report.py                per-stock summaries and the cross-stock comparison
 ├── notebooks/
-│   └── analysis.ipynb  the full analysis, start to finish
-├── tests/              automated checks, run with `pytest`
-│   ├── test_data.py
-│   ├── test_features.py
-│   └── test_evaluate.py
-├── PROJECT_LOG.md      decisions, results, issues and lessons, kept up to date
-├── pytest.ini          test settings
+│   ├── template.ipynb           the analysis for one stock (run.py fills in the ticker)
+│   └── comparison_template.ipynb  the side-by-side comparison
+├── reports/                     created by run.py
+│   ├── SPY.ipynb, NVDA.ipynb, ...   one finished report per stock
+│   ├── comparison.ipynb
+│   └── summaries/               each stock's headline numbers (used by the comparison)
+├── tests/                       automated checks, run with `pytest`
+├── PROJECT_LOG.md               decisions, results, issues and lessons, kept up to date
+├── pytest.ini                   test settings
 └── requirements.txt
 ```
 
-The logic lives in `src/` as small, plain functions. The notebook imports them and tells the story.
+The logic lives in `src/` as small, plain functions. The notebooks import them and tell the story.
 
 ## How to run
 
@@ -53,37 +58,42 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 pytest                           # optional: check everything works (a few seconds)
-jupyter notebook notebooks/analysis.ipynb
 ```
 
-Then run all cells (Run → Run All Cells). The first run downloads SPY prices from 2005 to today and saves them in `data/`; later runs use that saved copy.
+### Creating reports
+
+```bash
+python run.py SPY                       # one stock    -> reports/SPY.ipynb
+python run.py SPY NVDA AAPL GOOGL       # several      -> one report each + reports/comparison.ipynb
+python run.py AAPL --refresh            # re-download the latest prices first
+python run.py --help                    # all options
+```
+
+Each report takes about 30 seconds. The first run of a stock downloads its prices from 2005 to today and saves them in `data/`; later runs use that saved copy, so results stay the same until you `--refresh`. If a ticker fails (a typo, no internet), the others still run and the message says which one failed.
+
+Open a finished report in VS Code or with `jupyter notebook reports/NVDA.ipynb`. It already contains every table and chart; there's nothing to run.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--start` | `2005-01-01` | First date of data |
+| `--first-test-year` | automatic | First year predicted; automatic picks the first year with about 4 years of history before it (2010 for these stocks) |
+| `--cost` | `0.001` | Cost per buy or sell in the backtest (0.1%) |
+| `--refresh` | off | Re-download prices before running |
+| `--no-comparison` | off | Skip the comparison when running several stocks |
 
 ### Every time you come back
-
-Open Terminal and run:
 
 ```bash
 cd Stock_Movement_Predictor      # use the full path if you're not in the parent folder,
                                  # e.g. cd ~/Documents/Stock_Movement_Predictor
 source .venv/bin/activate        # your prompt should now start with (.venv)
-jupyter notebook notebooks/analysis.ipynb
 ```
 
-No need to create the environment or install anything again.
+Then `python run.py ...` as above. Run `deactivate` when you're done, or just close the terminal.
 
-### When you're done
+### Changing the analysis itself
 
-1. In the browser, save the notebook (File → Save Notebook).
-2. In Terminal, press `Ctrl + C` to stop Jupyter (confirm with `y` if asked).
-3. Run `deactivate` to leave the virtual environment, or just close Terminal.
-
-### Getting the latest prices
-
-The saved data in `data/` doesn't update by itself. To pull the newest days, either delete the CSV in `data/` and run all cells again, or change the load line in the notebook to:
-
-```python
-prices = load_prices(TICKER, START, refresh=True)
-```
+Edit `notebooks/template.ipynb` (or the code in `src/`), then run `python run.py` again to regenerate the reports. Edits made directly in a file in `reports/` are overwritten the next time that stock is run. Keep the template saved without outputs, so it stays small and clean.
 
 If you download while the US market is still open, today's row is left out automatically, because its price isn't final until the close (4 pm New York time).
 
@@ -95,28 +105,16 @@ With the virtual environment active, from the project folder:
 pytest
 ```
 
-It takes a few seconds and needs no internet: every test runs on small fake price series. A green line of dots and "passed" means everything works; a failure names the test and shows what went wrong. Run it after any change to `src/`.
-
-What the tests check:
+It takes a few seconds and needs no internet: every test runs on small fake price series. A green line of dots and "passed" means everything works; a failure names the test and shows what went wrong. Run it after any change to `src/`, `run.py` or the templates.
 
 | Test file | What it checks |
 |---|---|
 | `test_features.py` | No feature uses future prices; labels match the next day's real move; known values on a simple price series |
 | `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right and the planted pattern really reverses about 60% of the time |
 | `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest and performance arithmetic match hand calculations; the luck check spots a perfect strategy; the pipeline finds the planted pattern and finds nothing in noise |
+| `test_report.py` | Summaries are correct and saveable; the lucky-winners correction counts properly; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
 The tests were checked by planting realistic bugs (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix): each one makes at least one test fail.
-
-## Settings
-
-At the top of the notebook:
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `TICKER` | `"SPY"` | Any Yahoo Finance symbol |
-| `START` | `"2005-01-01"` | First date of data |
-| `FIRST_TEST_YEAR` | `None` | First year predicted; `None` picks the first year with about 4 years of history before it (2010 for SPY) |
-| `COST` | `0.001` | Cost per buy or sell in the backtest (0.1%) |
 
 ## Features
 
@@ -130,10 +128,11 @@ The models use five features, one per idea:
 | `vol_20d` | Standard deviation of daily returns over 20 days |
 | `volume_ratio` | Today's volume vs. its 20-day average |
 
-Three more are calculated but left out because they nearly duplicate a kept one: `ret_10d`, `ret_20d` and `dist_ma10`. The notebook shows the overlap and checks that adding them back doesn't help.
+Three more are calculated but left out because they nearly duplicate a kept one: `ret_10d`, `ret_20d` and `dist_ma10`. Each report shows the overlap and checks that adding them back doesn't help.
 
 ## Limitations
 
 - The backtest assumes trades happen exactly at the closing price.
 - Costs are a flat percentage; real costs vary.
-- One ticker and daily data only.
+- Daily data only.
+- NVDA, AAPL and GOOGL were chosen knowing they became huge winners, so their buy-and-hold results look good partly in hindsight. Each report says so.

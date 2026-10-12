@@ -2,4 +2,4 @@ data/
 __pycache__/
 .ipynb_checkpoints/
 .venv/
-.DS_Store
+.DS_Storenotebooks/analysis.ipynb

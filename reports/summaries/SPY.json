@@ -1,0 +1,35 @@
+{
+  "ticker": "SPY",
+  "test start": "2010-01-04",
+  "test end": "2026-10-07",
+  "test days": 4216,
+  "cost": 0.001,
+  "always up accuracy": 0.5521821631878557,
+  "buy and hold": {
+    "annual return": 0.14157925240575997,
+    "Sharpe ratio": 0.862691910105297,
+    "max drawdown": -0.33717286856294393
+  },
+  "models": {
+    "Logistic regression": {
+      "accuracy": 0.5512333965844403,
+      "predicted up": 0.9848197343453511,
+      "p-value vs always up": 0.5556288794747358,
+      "annual return": 0.14905271677317877,
+      "Sharpe ratio": 0.9256699287903246,
+      "max drawdown": -0.2666845985619698,
+      "cash days": 64,
+      "share of random >=": 0.0475
+    },
+    "Gradient boosting": {
+      "accuracy": 0.527988614800759,
+      "predicted up": 0.7827324478178368,
+      "p-value vs always up": 0.9992384401922174,
+      "annual return": 0.05388375227013076,
+      "Sharpe ratio": 0.42990913678321147,
+      "max drawdown": -0.27381469856274,
+      "cash days": 916,
+      "share of random >=": 0.9985
+    }
+  }
+}

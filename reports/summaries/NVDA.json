@@ -1,0 +1,35 @@
+{
+  "ticker": "NVDA",
+  "test start": "2010-01-04",
+  "test end": "2026-10-09",
+  "test days": 4218,
+  "cost": 0.001,
+  "always up accuracy": 0.5284495021337127,
+  "buy and hold": {
+    "annual return": 0.4554255363645281,
+    "Sharpe ratio": 1.0527987391477036,
+    "max drawdown": -0.6633510420731232
+  },
+  "models": {
+    "Logistic regression": {
+      "accuracy": 0.5158843053579896,
+      "predicted up": 0.8276434329065908,
+      "p-value vs always up": 0.9505024922603593,
+      "annual return": 0.33491028336800066,
+      "Sharpe ratio": 0.9327029153911536,
+      "max drawdown": -0.6189535081713909,
+      "cash days": 727,
+      "share of random >=": 0.7055
+    },
+    "Gradient boosting": {
+      "accuracy": 0.5109056424845898,
+      "predicted up": 0.5912754860123282,
+      "p-value vs always up": 0.9891870682350012,
+      "annual return": 0.22879279529937846,
+      "Sharpe ratio": 0.7723285365343101,
+      "max drawdown": -0.5134837730240072,
+      "cash days": 1724,
+      "share of random >=": 0.6205
+    }
+  }
+}

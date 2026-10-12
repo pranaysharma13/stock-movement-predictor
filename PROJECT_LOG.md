@@ -8,7 +8,7 @@ Neither model predicts SPY's daily direction better than the simple rule "always
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; 5 price-based features; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–3 are built: fixes, 46 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Next: phase 4 (volatility).
+- **Status:** phases 1–3 are built: fixes, 46 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. The first four-stock run is done. Next: phase 4 (volatility).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -88,11 +88,30 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 
 ## Results so far
 
-No model beats "always up" on accuracy. After phase 1, logistic regression edges past buy-and-hold in the backtest, but the edge is borderline luck and rests on a few crash days. Phase 1 results come first; version 1 results (8 features) are kept below for comparison.
+No model beats "always up" on any of the four stocks, and on single stocks every model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
 
-NVDA, AAPL and GOOGL results come from the reports in [`reports/`](reports/); start with [`reports/comparison.ipynb`](reports/comparison.ipynb).
+### After phase 3: four stocks
 
-### After phase 1 (5 features, unfinished day removed)
+Run locally on 12 October 2026 with `python run.py SPY NVDA AAPL GOOGL`; test period 2010 to October 2026 for every stock. Edge is accuracy minus "always up", in percentage points. Full reports: [`reports/`](reports/), starting with [`reports/comparison.ipynb`](reports/comparison.ipynb).
+
+| Stock | Model | Accuracy | Always up | Edge | Annual return | Buy and hold | Share of random cash days doing as well |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SPY | Logistic regression | 55.1% | 55.2% | -0.1 | 14.9% | 14.2% | 0.048 |
+| SPY | Gradient boosting | 52.8% | 55.2% | -2.4 | 5.4% | 14.2% | 0.999 |
+| NVDA | Logistic regression | 51.6% | 52.8% | -1.3 | 33.5% | 45.5% | 0.71 |
+| NVDA | Gradient boosting | 51.1% | 52.8% | -1.8 | 22.9% | 45.5% | 0.62 |
+| AAPL | Logistic regression | 52.9% | 53.1% | -0.1 | 22.5% | 26.8% | 0.87 |
+| AAPL | Gradient boosting | 51.4% | 53.1% | -1.7 | 9.7% | 26.8% | 0.99 |
+| GOOGL | Logistic regression | 52.1% | 52.8% | -0.8 | 12.2% | 20.5% | 0.996 |
+| GOOGL | Gradient boosting | 51.8% | 52.8% | -1.0 | 5.3% | 20.5% | 0.97 |
+
+- **Accuracy:** all 8 edges are negative; 0 of 8 pass at 5%, 0 of 8 after the correction.
+- **Gradient boosting is worse than logistic regression on every stock.** For SPY, NVDA and AAPL its whole 95% range sits below zero: reliably worse than "always up", the same overfitting on every stock.
+- **Backtest:** on NVDA, AAPL and GOOGL every model trails buy-and-hold by 4 to 23 points a year. Only SPY's logistic regression passes the luck check at 5% (0.048), and not after the correction (0.0063). The same model does worse than random cash days on the other three stocks, so the phase 1 lead looks like luck.
+- **How often a stock rises isn't where returns come from.** NVDA rose on 52.8% of days, fewer than SPY's 55.2%, yet returned 45.5% a year against 14.2%: its up days were much bigger than its down days. A direction-only model can't see that.
+- **Hindsight:** the single stocks' buy-and-hold returns (20–46% a year) are high partly because they were picked knowing they became winners.
+
+### After phase 1: SPY (5 features, unfinished day removed)
 
 Run on the saved SPY CSV on 9 October 2026; test period 4 January 2010 to 7 October 2026 (4,216 days).
 
@@ -111,7 +130,7 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 | Gradient boosting | 5.4% | 0.43 | -27.4% | 916 | 1,110 | 0.999 |
 
 - Logistic regression now edges past buy-and-hold, but treat it as a lead, not a finding. Random cash days do as well about 1 time in 20, and one day, the 16 March 2020 crash (-10.9%), supplies more than half of the gain. With all 8 features, the same model lost to buy-and-hold (13.3%).
-- Its 64 cash days cluster in market crises: 2010–2011, 2020, 2022 and 2025. Phase 3 (other stocks) and phase 6 (future data) will test whether this holds up.
+- Its 64 cash days cluster in market crises: 2010–2011, 2020, 2022 and 2025. Phase 3 tested this on three other stocks, and it didn't hold up there; phase 6 will test it on future data.
 - Gradient boosting does worse than random: 99.9% of random choices of its 916 cash days did better.
 
 ### After phase 1: pipeline checks
@@ -153,10 +172,11 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Eighteen issues so far: sixteen fixed or worked around, one planned for a later phase, and one that turned out not to be a bug. Newest first.
+Nineteen issues so far: sixteen fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 19 | NVDA and GOOGL showed the identical "always up" accuracy, 0.5284495021337127, which could have meant one stock's data was a copy of the other's | 12 Oct 2026 | Not a bug | Checked day by day: both have exactly 2,229 up days out of 4,218, but move the same way on only 66.3% of days. A coincidence; the data is correct |
 | 18 | `.gitignore` had no line break at its end, so `echo` glued the new entry onto the last line (`.DS_Storenotebooks/analysis.ipynb`); neither rule worked and VS Code kept offering to add `analysis.ipynb` back | 12 Oct 2026 | Fixed | Split into two lines; checked with `git check-ignore -v`. VS Code's "Insert Final Newline" setting makes every file end with a line break |
 | 17 | The comparison chart's legend covered the GOOGL gradient-boosting point | 12 Oct 2026 | Fixed | Legend moved below the chart; found by rendering the chart and looking at it |
 | 16 | A comment on the same line as `FIRST_TEST_YEAR = None` in the settings cell made papermill print "Unable to parse line 4" on every run | 12 Oct 2026 | Fixed | Comments moved to their own lines |
@@ -201,6 +221,10 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 **Test the tests.** A test that never fails proves nothing. Each test was checked by planting a realistic bug in a copy of the code (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix, the old `walk_forward` line) and confirming at least one test failed.
 
 **The more you test, the stricter the bar.** At the 5% level, 1 test in 20 passes by luck. With 4 stocks and 2 models, that's 8 chances, so about 0.4 lucky passes are expected before anything real happens. SPY's borderline backtest result (luck share 0.048) passes at 5% but not at the corrected 0.63%.
+
+**A real pattern should replicate.** SPY's borderline backtest edge looked interesting on its own. Testing the same model on three more stocks showed nothing like it, which is the strongest evidence that it was luck. One good-looking result is a reason to test more, not a finding.
+
+**Direction accuracy isn't where returns come from.** NVDA rose on fewer days than SPY but returned three times as much per year, because its up days were bigger. Predicting up or down ignores the size of the move, and that's where the money is.
 
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
@@ -264,6 +288,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 12 Oct 2026 | NVDA/GOOGL match checked | Identical "always up" accuracy traced to equal up-day counts by coincidence (issue 19) |
+| 12 Oct 2026 | First four-stock run | SPY, NVDA, AAPL, GOOGL run locally; results under Results so far; 0 of 8 accuracy passes, 1 of 8 backtest passes at 5% and 0 after the correction |
 | 12 Oct 2026 | `analysis.ipynb` kept locally | Untracked from GitHub with `git rm --cached` and listed in `.gitignore`; every earlier version stays in the repo's history. Fixed a `.gitignore` line-break problem on the way (issue 18) |
 | 12 Oct 2026 | Phase 3 built | `notebooks/template.ipynb` replaces `analysis.ipynb`; `run.py` creates `reports/<TICKER>.ipynb` per stock and `reports/comparison.ipynb`; `src/report.py` for summaries and the Bonferroni-corrected comparison; hindsight note in every report; 15 new tests (46 total); checked end to end on the saved SPY data plus fake NVDA, AAPL, GOOGL and a short-history stock; `papermill` added to requirements |
 | 9 Oct 2026 | Phase 2 built | 31 `pytest` tests in `tests/` (data, features, evaluation); run in about 4 seconds without internet; each checked against planted bugs; README section and `pytest` in requirements |

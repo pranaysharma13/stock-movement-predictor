@@ -153,10 +153,11 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Seventeen issues so far: fifteen fixed or worked around, one planned for a later phase, and one that turned out not to be a bug. Newest first.
+Eighteen issues so far: sixteen fixed or worked around, one planned for a later phase, and one that turned out not to be a bug. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 18 | `.gitignore` had no line break at its end, so `echo` glued the new entry onto the last line (`.DS_Storenotebooks/analysis.ipynb`); neither rule worked and VS Code kept offering to add `analysis.ipynb` back | 12 Oct 2026 | Fixed | Split into two lines; checked with `git check-ignore -v`. VS Code's "Insert Final Newline" setting makes every file end with a line break |
 | 17 | The comparison chart's legend covered the GOOGL gradient-boosting point | 12 Oct 2026 | Fixed | Legend moved below the chart; found by rendering the chart and looking at it |
 | 16 | A comment on the same line as `FIRST_TEST_YEAR = None` in the settings cell made papermill print "Unable to parse line 4" on every run | 12 Oct 2026 | Fixed | Comments moved to their own lines |
 | 15 | While copying phase 1 into the project by hand, `walk_forward`'s first line stayed at the old version while its body was new, so every call would crash | 9 Oct 2026 | Fixed | Caught in review and fixed; phase 2's tests now catch it automatically (7 tests fail on that version) |
@@ -225,6 +226,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Run tests automatically on GitHub? | No; tests run locally with `pytest` |
 | What the live forward test tracks | All four stocks; logistic regression for direction plus the volatility model chosen in phase 4; no LSTM |
 | Google ticker | `GOOGL` (class A shares) |
+| Keep `notebooks/analysis.ipynb`? | Yes, locally only, as a frozen phase 1 snapshot; off GitHub, where it would duplicate `reports/SPY.ipynb`. It may stop running as `src/` changes |
 | Known bias | NVDA, AAPL and GOOGL were picked knowing they became huge winners; the reports will say buy-and-hold looks good partly in hindsight |
 
 ### My own tasks
@@ -262,6 +264,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 12 Oct 2026 | `analysis.ipynb` kept locally | Untracked from GitHub with `git rm --cached` and listed in `.gitignore`; every earlier version stays in the repo's history. Fixed a `.gitignore` line-break problem on the way (issue 18) |
 | 12 Oct 2026 | Phase 3 built | `notebooks/template.ipynb` replaces `analysis.ipynb`; `run.py` creates `reports/<TICKER>.ipynb` per stock and `reports/comparison.ipynb`; `src/report.py` for summaries and the Bonferroni-corrected comparison; hindsight note in every report; 15 new tests (46 total); checked end to end on the saved SPY data plus fake NVDA, AAPL, GOOGL and a short-history stock; `papermill` added to requirements |
 | 9 Oct 2026 | Phase 2 built | 31 `pytest` tests in `tests/` (data, features, evaluation); run in about 4 seconds without internet; each checked against planted bugs; README section and `pytest` in requirements |
 | 9 Oct 2026 | Phase 1 files reviewed | Local copies of `data.py`, `features.py` and `evaluate.py` checked line by line; one crash-causing mix-up in `walk_forward` found and fixed |

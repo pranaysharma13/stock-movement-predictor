@@ -2,7 +2,8 @@
 Summaries for each stock, and the comparison across stocks.
 
 safe_name()          a ticker turned into a safe file name ("^GSPC" -> "_GSPC")
-summarize()          the headline numbers of one stock's report
+summarize()          the headline numbers of one stock's direction results
+summarize_vol()      the same for the move-size task (stored under "volatility")
 save_summary()       write them to reports/summaries/<ticker>.json
 load_summaries()     read them back for the comparison
 comparison_table()   one row per stock and model, plus the lucky-winners check
@@ -11,6 +12,7 @@ The lucky-winners problem: test enough stocks and models, and a few will
 "win" by chance alone. At the usual 5% level, about 1 comparison in 20 passes
 even when nothing real is going on. So the comparison also applies a stricter
 bar (the Bonferroni correction): divide 5% by the number of comparisons.
+The two tasks answer different questions, so each is corrected on its own.
 """
 
 
@@ -30,6 +32,7 @@ SUMMARY_DIR = ROOT / "reports" / "summaries"
 
 def safe_name(ticker):
     """A ticker as a file name: letters, digits, dot, dash and underscore only."""
+
     return re.sub(r"[^A-Za-z0-9._-]", "_", ticker)
 
 
@@ -92,6 +95,64 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
     }
 
 
+def half_on_big(pred):
+    """The move-size strategy: a full position on predicted calm days, half on predicted big days."""
+
+    return 1 - 0.5 * pd.Series(pred)
+
+
+def summarize_vol(test, model_preds, baselines, cost=0.001, luck=None, luck_trials=2000):
+    """Headline numbers for the move-size task of one stock.
+
+    test:        test-period rows of the move-size dataset (target, next_ret)
+    model_preds: {model name: DataFrame with a "pred" column}, from walk_forward()
+    baselines:   output of vol_baseline_predictions() for the test days
+    luck:        {model name: luck_check(..., metric="Sharpe ratio") result},
+                 if already calculated
+
+    Each model is judged twice: accuracy against "same as today", and the
+    half-on-big strategy's Sharpe ratio against random half-position days.
+    """
+
+    target, next_ret = test["target"], test["next_ret"]
+    same_as_today = float((baselines["Same as today"] == target).mean())
+    luck = dict(luck or {})
+
+    def strategy(pred):
+        perf = performance(backtest(half_on_big(pred), next_ret, cost))
+        return {k: float(perf[k]) for k in ("annual return", "Sharpe ratio", "max drawdown")}
+
+    models = {}
+    for name, p in model_preds.items():
+        pred = p["pred"].reindex(test.index)
+        correct = pred == target
+        n, k = len(correct), int(correct.sum())
+        if name not in luck:
+            luck[name] = luck_check(half_on_big(pred), next_ret, cost=cost,
+                                    n_trials=luck_trials, metric="Sharpe ratio")
+        models[name] = {
+            "accuracy": k / n,
+            "predicted big": float(pred.mean()),
+            # Chance of an accuracy this high if the model were no better than "same as today"
+            "p-value vs same as today": float(binomtest(k, n, same_as_today, alternative="greater").pvalue),
+            "strategy": strategy(pred),
+            "share of random >=": float(luck[name]["share of random >="]),
+        }
+
+    hold = performance(backtest(pd.Series(1, index=test.index), next_ret, cost))
+    return {
+        "test start": str(test.index[0].date()),
+        "test end": str(test.index[-1].date()),
+        "test days": int(len(test)),
+        "share of big days": float(target.mean()),
+        "majority accuracy": float(max(target.mean(), 1 - target.mean())),
+        "same as today accuracy": same_as_today,
+        "buy and hold": {k: float(hold[k]) for k in ("annual return", "Sharpe ratio", "max drawdown")},
+        "same as today strategy": strategy(baselines["Same as today"]),
+        "models": models,
+    }
+
+
 def save_summary(summary, folder=SUMMARY_DIR):
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -113,17 +174,7 @@ def load_summaries(tickers, folder=SUMMARY_DIR):
     return summaries
 
 
-def comparison_table(summaries, alpha=0.05):
-    """One row per stock and model, with plain and corrected pass/fail columns.
-
-    Returns (table, info):
-      table: accuracy vs "always up", backtest vs buy-and-hold, and four
-             yes/no columns: does it pass at alpha, and at alpha divided by
-             the number of comparisons?
-      info:  number of comparisons, the corrected threshold, and how many
-             passes you would expect by luck alone at alpha
-    """
-    
+def _direction_rows(summaries):
     rows = []
     for s in summaries:
         for model, m in s["models"].items():
@@ -139,11 +190,63 @@ def comparison_table(summaries, alpha=0.05):
                 "buy and hold": s["buy and hold"]["annual return"],
                 "share of random >=": np.nan if luck is None else luck,
             })
+    return rows, "p-value vs always up"
+
+
+def _volatility_rows(summaries):
+    rows = []
+    for s in summaries:
+        v = s.get("volatility")
+        if v is None:
+            raise ValueError(
+                f"The summary for {s['ticker']} has no move-size results; "
+                f"it was made before phase 4. Run `python run.py {s['ticker']}` again."
+            )
+        for model, m in v["models"].items():
+            rows.append({
+                "stock": s["ticker"],
+                "model": model,
+                "accuracy": m["accuracy"],
+                "same as today": v["same as today accuracy"],
+                "majority": v["majority accuracy"],
+                "edge": m["accuracy"] - v["same as today accuracy"],
+                "p-value vs same as today": m["p-value vs same as today"],
+                "Sharpe (half on big)": m["strategy"]["Sharpe ratio"],
+                "Sharpe (buy and hold)": v["buy and hold"]["Sharpe ratio"],
+                "max drawdown (half on big)": m["strategy"]["max drawdown"],
+                "max drawdown (buy and hold)": v["buy and hold"]["max drawdown"],
+                "share of random >=": m["share of random >="],
+            })
+    return rows, "p-value vs same as today"
+
+
+def comparison_table(summaries, alpha=0.05, task="direction"):
+    """One row per stock and model, with plain and corrected pass/fail columns.
+
+    task: "direction" (up vs. down, judged against "always up" and, in the
+          backtest, on annual return) or "volatility" (big vs. small moves,
+          judged against "same as today" and, in the half-on-big backtest,
+          on Sharpe ratio). Each task gets its own correction.
+
+    Returns (table, info):
+      table: accuracy vs the task's baseline, backtest results, and four
+             yes/no columns: does it pass at alpha, and at alpha divided by
+             the number of comparisons?
+      info:  number of comparisons, the corrected threshold, and how many
+             passes you would expect by luck alone at alpha
+    """
+
+    if task == "direction":
+        rows, p_column = _direction_rows(summaries)
+    elif task == "volatility":
+        rows, p_column = _volatility_rows(summaries)
+    else:
+        raise ValueError(f"task must be 'direction' or 'volatility', not {task!r}")
     table = pd.DataFrame(rows).set_index(["stock", "model"])
     n = len(table)
     corrected = alpha / n if n else alpha
 
-    p = table["p-value vs always up"]
+    p = table[p_column]
     luck = table["share of random >="]
     table["accuracy edge (5%)?"] = p < alpha
     table["accuracy edge (corrected)?"] = p < corrected

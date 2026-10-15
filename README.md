@@ -1,8 +1,13 @@
 # Stock Direction Predictor
 
-Can a machine learning model predict whether a stock closes higher tomorrow, better than simple rules can? Tested on SPY (the S&P 500), NVDA, AAPL and GOOGL, and runnable for any stock with one command.
+Can a machine learning model predict tomorrow's stock move, better than simple rules can? Tested on SPY (the S&P 500), NVDA, AAPL and GOOGL, and runnable for any stock with one command.
 
-This project predicts **direction** (up or down), not price, and tests the answer honestly:
+The project asks two questions about tomorrow, never the exact price:
+
+1. **Direction:** will the stock close higher? Judged against "always predict up."
+2. **Move size:** will the move, up or down, be bigger than usual? Judged against "same as today" (if today was a big day, predict tomorrow will be too).
+
+Both are tested honestly:
 
 - **Walk-forward testing:** every prediction comes from a model trained only on earlier years.
 - **Real baselines:** models must beat "always predict up," not just a coin flip.
@@ -11,6 +16,7 @@ This project predicts **direction** (up or down), not price, and tests the answe
 - **Luck check:** any backtest edge is compared with sitting out the same number of random days.
 - **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
 - **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar, because some will "win" by chance alone.
+- **Does it help?** Move-size predictions are turned into a strategy that halves the position on predicted big days, judged on risk (Sharpe ratio, worst drop) after trading costs.
 
 For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
 
@@ -25,11 +31,11 @@ Stock_Movement_Predictor/
 ├── run.py                       one command to create the reports
 ├── src/
 │   ├── data.py                  download and cache prices; fake prices for the pipeline checks
-│   ├── features.py              features (returns, moving averages, volatility, volume) and label
+│   ├── features.py              features and labels for both tasks
 │   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
 │   └── report.py                per-stock summaries and the cross-stock comparison
 ├── notebooks/
-│   ├── template.ipynb           the analysis for one stock (run.py fills in the ticker)
+│   ├── template.ipynb           the analysis for one stock, both parts (run.py fills in the ticker)
 │   └── comparison_template.ipynb  the side-by-side comparison
 ├── reports/                     created by run.py
 │   ├── SPY.ipynb, NVDA.ipynb, ...   one finished report per stock
@@ -69,7 +75,7 @@ python run.py AAPL --refresh            # re-download the latest prices first
 python run.py --help                    # all options
 ```
 
-Each report takes about 30 seconds. The first run of a stock downloads its prices from 2005 to today and saves them in `data/`; later runs use that saved copy, so results stay the same until you `--refresh`. If a ticker fails (a typo, no internet), the others still run and the message says which one failed.
+Each report takes about 45–50 seconds. The first run of a stock downloads its prices from 2005 to today and saves them in `data/`; later runs use that saved copy, so results stay the same until you `--refresh`. If a ticker fails (a typo, no internet), the others still run and the message says which one failed.
 
 Open a finished report in VS Code or with `jupyter notebook reports/NVDA.ipynb`. It already contains every table and chart; there's nothing to run.
 
@@ -109,14 +115,16 @@ It takes a few seconds and needs no internet: every test runs on small fake pric
 
 | Test file | What it checks |
 |---|---|
-| `test_features.py` | No feature uses future prices; labels match the next day's real move; known values on a simple price series |
-| `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right and the planted pattern really reverses about 60% of the time |
-| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest and performance arithmetic match hand calculations; the luck check spots a perfect strategy; the pipeline finds the planted pattern and finds nothing in noise |
-| `test_report.py` | Summaries are correct and saveable; the lucky-winners correction counts properly; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
+| `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" uses only the past year; known values on simple price series |
+| `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
+| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest arithmetic matches hand calculations, including half positions; the luck check works on returns and on Sharpe ratio; both pipeline checks pass for both tasks |
+| `test_report.py` | Summaries for both tasks are correct and saveable; the lucky-winners correction counts properly and is applied to each task separately; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
-The tests were checked by planting realistic bugs (a feature that peeks at tomorrow, training on the test year, removing the unfinished-day fix): each one makes at least one test fail.
+The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats): each one makes at least one test fail.
 
 ## Features
+
+### Part 1: direction
 
 The models use five features, one per idea:
 
@@ -130,9 +138,22 @@ The models use five features, one per idea:
 
 Three more are calculated but left out because they nearly duplicate a kept one: `ret_10d`, `ret_20d` and `dist_ma10`. Each report shows the overlap and checks that adding them back doesn't help.
 
+### Part 2: move size
+
+A day is **big** when its move, up or down, is larger than the stock's typical move: the median daily move over the previous 250 trading days. Every feature is measured relative to that typical move, so "big" means the same for a calm fund and a wild stock.
+
+| Feature | Meaning |
+|---|---|
+| `abs_ret_rel` | Today's move size |
+| `vol_5d_rel` | How jumpy the last week was |
+| `vol_20d_rel` | How jumpy the last month was |
+| `range_rel` | How far the price swung within today, from low to high |
+| `volume_ratio` | Today's volume vs. its 20-day average |
+
 ## Limitations
 
 - The backtest assumes trades happen exactly at the closing price.
 - Costs are a flat percentage; real costs vary.
 - Daily data only.
+- The half-on-big strategy switches between full and half positions often, so its result depends heavily on the assumed trading cost.
 - NVDA, AAPL and GOOGL were chosen knowing they became huge winners, so their buy-and-hold results look good partly in hindsight. Each report says so.

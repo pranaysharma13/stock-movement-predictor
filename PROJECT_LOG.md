@@ -1,14 +1,14 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 12 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
+*Last updated: 15 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
 
 ## Overview
 
-Neither model predicts SPY's daily direction better than the simple rule "always predict up", and our checks show the reason is the data, not the code: past prices hold no usable signal for tomorrow's direction.
+No model predicts tomorrow's direction better than "always predict up" on any of four stocks: past prices hold no usable signal for direction. Move size is different: on all four stocks, both models predict big vs. small days better than the rule "same as today", by 3 to 8 percentage points, and all 8 results survive the correction for testing many things.
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
-- **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; 5 price-based features; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–3 are built: fixes, 46 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. The first four-stock run is done. Next: phase 4 (volatility).
+- **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; two tasks (direction, and big vs. small moves) with 5 price-based features each; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
+- **Status:** phases 1–4 are built: fixes, 67 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 adds a second task, big vs. small moves, to every report. Next: phase 5 (LSTM).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -37,6 +37,12 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Hindsight note | Every report says how much $1 grew and warns that well-known winners look good partly in hindsight | NVDA, AAPL and GOOGL were picked knowing how they turned out |
 | Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
 | Automated tests | 46 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
+| Move-size label (Part 2) | Big = tomorrow's move, up or down, larger than the median daily move over the previous 250 trading days | A fixed bar like 1% means something different for a calm fund and a wild stock; the past-year median adapts to each stock and era and gives about half big days |
+| Move-size features | Today's move size, 5- and 20-day volatility, today's high-low range, volume ratio; all relative to the typical move | All measure recent move size, on the same scale as the label |
+| Move-size baselines | Always small / always big, and "same as today" (big tomorrow if today was big) | "Same as today" is volatility clustering in one line, so it is the real bar |
+| Move-size strategy | Full position on predicted calm days, half on predicted big days; judged on Sharpe ratio and worst drop; luck check on Sharpe ratio | Volatility targeting aims at less risk per unit of return, not more return |
+| Move-size pipeline checks | Constant-volatility prices (should find nothing) and GARCH clustered-volatility prices with index-like settings 0.10 / 0.88 (should find it) | Proves the move-size pipeline neither invents nor misses clustering |
+| Correction across stocks | Applied to each task separately: 8 direction and 8 move-size comparisons | The two tasks answer different questions |
 | Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
@@ -86,9 +92,68 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 | 5% vs corrected columns | Whether a result passes as a single test, and after dividing 5% by the number of comparisons | Only corrected passes count as evidence |
 | Luck count | How many passes luck alone would produce, next to the actual passes | Passes close to the luck count mean nothing |
 
+### Part 2: move size (report sections 8–12)
+
+| Part | What it shows | What to look for |
+| --- | --- | --- |
+| Typical move chart | The bar a "big" day is measured against, over time | It rises in turbulent years (2008, 2020, 2022) and falls in calm ones |
+| Feature correlation | How each move-size feature relates to a big day tomorrow | Clearly positive, unlike Part 1 |
+| Accuracy table | Each method's accuracy, with "beats same as today?" | The honest test: the model's whole 95% range above "same as today" |
+| Accuracy by year | Models and "same as today" year by year | An edge in every year, not just a few |
+| Pipeline checks | Constant volatility (about 50%) and clustered volatility (beats "same as today") | Both should behave as described |
+| Half-on-big backtest | Sharpe ratio, worst drop and trades, with free trading and with costs | Lower risk only counts if Sharpe holds up after costs |
+| Return per unit of risk | Average return divided by daily swing, on predicted big vs. calm days | If similar, halving big days cuts reward as much as risk |
+| Luck check | How often random half-position days reach the same Sharpe ratio | About 0.05 or less is hard to explain by luck |
+
 ## Results so far
 
-No model beats "always up" on any of the four stocks, and on single stocks every model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+Move size is predictable on all four stocks; direction is not. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+
+### After phase 4: move size on four stocks
+
+Run locally on 15 October 2026 with `python run.py SPY NVDA AAPL GOOGL`; test period January 2010 to October 2026 for every stock. Edge is accuracy minus "same as today", in percentage points. Sharpe and worst drop are for half on predicted big days, after 0.1% costs.
+
+| Stock | Model | Accuracy | Same as today | Edge | Sharpe (half on big) | Sharpe (buy and hold) | Worst drop (half on big) | Worst drop (buy and hold) | Share of random doing as well |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPY | Logistic regression | 61.6% | 53.3% | +8.3 | 0.72 | 0.86 | -21.6% | -33.7% | 0.96 |
+| SPY | Gradient boosting | 61.1% | 53.3% | +7.8 | 0.61 | 0.86 | -19.9% | -33.7% | 1.00 |
+| NVDA | Logistic regression | 57.5% | 51.6% | +5.9 | 1.00 | 1.05 | -50.3% | -66.3% | 0.51 |
+| NVDA | Gradient boosting | 55.3% | 51.6% | +3.7 | 0.84 | 1.05 | -56.6% | -66.3% | 0.99 |
+| AAPL | Logistic regression | 58.1% | 53.0% | +5.1 | 1.01 | 0.99 | -34.6% | -43.8% | 0.16 |
+| AAPL | Gradient boosting | 56.2% | 53.0% | +3.2 | 0.84 | 0.99 | -39.6% | -43.8% | 0.88 |
+| GOOGL | Logistic regression | 56.3% | 50.6% | +5.7 | 0.71 | 0.81 | -43.7% | -44.3% | 0.81 |
+| GOOGL | Gradient boosting | 55.1% | 50.6% | +4.5 | 0.64 | 0.81 | -44.0% | -44.3% | 0.97 |
+
+- **Accuracy:** all 8 beat "same as today", at 5% and after the correction (8 of 8 both times), against 0 of 8 for direction. Every 95% range sits right of zero.
+- **Logistic regression beats gradient boosting on every stock,** by 0.5 to 2.4 points, as in Part 1. It is the move-size model for phase 6.
+- **The edge is largest on SPY** (+8.3 vs +5 to 6). A likely reason: an index's swings come from market-wide news, which clusters, while single stocks also jump on company events such as earnings reports, which the features can't see.
+- **The models use more than yesterday's move:** on GOOGL, "same as today" barely beats guessing (50.6% vs 50.0%), yet logistic regression reaches 56.3%.
+- **Strategy:** halving on predicted big days shrinks the worst drop on every stock but GOOGL, but Sharpe after costs beats buy-and-hold only on AAPL (1.01 vs 0.99), with a luck share of 0.16: easily chance. 0 of 8 pass the luck check.
+
+### After phase 4: move size on SPY
+
+Run on the saved SPY CSV on 15 October 2026; test period 4 January 2010 to 7 October 2026 (4,216 days); 49.2% of days were big.
+
+| Method | Accuracy | 95% range | Beats "same as today"? |
+| --- | --- | --- | --- |
+| Logistic regression | 61.6% | 60.2–63.1% | Yes |
+| Gradient boosting | 61.1% | 59.7–62.6% | Yes |
+| Same as today | 53.3% | 51.8–54.9% | — |
+| Always small | 50.8% | 49.3–52.3% | No |
+
+- **The signal is real and steady:** both models beat "same as today" in every year from 2010 to 2026. Today's high-low range is the most informative feature (correlation 0.24 with a big day tomorrow).
+- **Pipeline checks pass:** about 50% on constant-volatility prices; on clustered-volatility prices logistic regression scores 58.2% and gradient boosting 57.1%, both beating "same as today" (54.3%).
+
+| Strategy (0.1% cost per trade) | Sharpe ratio | Sharpe with free trading | Max drawdown | Trades |
+| --- | --- | --- | --- | --- |
+| Buy and hold | 0.86 | 0.86 | -33.7% | 1 |
+| Logistic regression, half on big | 0.72 | 0.91 | -21.6% | 789 |
+| Gradient boosting, half on big | 0.61 | 0.89 | -19.9% | 1,060 |
+| Same as today, half on big | 0.34 | 0.82 | -24.0% | 1,964 |
+
+- **Predicting risk works; profiting from it is harder.** Halving on predicted big days cuts the worst drop from -34% to about -20%. With free trading, logistic regression's Sharpe edges past buy-and-hold (0.91 vs 0.86); after costs it falls to 0.72.
+- **Why:** days the model calls big are twice as wild (daily swing 1.53% vs 0.77%) but also earn about twice as much (+0.090% vs +0.044% a day), so return per unit of risk is the same (0.059 vs 0.057). Halving big days cuts reward as much as risk.
+- **Luck check:** random half-position days, trading free, reach a higher Sharpe than the costed strategy 96% of the time (logistic regression) and 99.8% (gradient boosting).
 
 ### After phase 3: four stocks
 
@@ -226,6 +291,14 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **Direction accuracy isn't where returns come from.** NVDA rose on fewer days than SPY but returned three times as much per year, because its up days were bigger. Predicting up or down ignores the size of the move, and that's where the money is.
 
+**Some things are predictable, some aren't.** The same features, models and tests that found nothing in direction find a strong, steady signal in move size. That contrast is the clearest proof that the pipeline works and that direction really is unpredictable here.
+
+**Predicting risk isn't the same as profiting from it.** The models spot wild days well, but wild days also earn more, so cutting exposure on them cuts reward as much as risk, and frequent switching adds costs. A correct prediction still needs a use that survives costs.
+
+**Make the planted pattern realistic.** The first clustered-volatility check used milder clustering than real markets, and gradient boosting only just missed the bar. Setting it to typical index values (0.10 / 0.88) made the check a fair test of what real data looks like.
+
+**The simpler model keeps winning.** Logistic regression beat gradient boosting on every stock, in both tasks. A more flexible model only helps if the extra patterns it finds carry over to later years; here they didn't.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
@@ -237,7 +310,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [x] **Phase 1, fixes:** drop the unfinished trading day; trim to 5 features (all 8 kept available); first test year set automatically; planted-pattern test
 - [x] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
 - [x] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
-- [ ] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
+- [x] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
 - [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
 - [ ] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's
 - [ ] **Phase 7, write-up:** result charts in the README; Conclusions written
@@ -248,7 +321,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | --- | --- |
 | LSTM in every report? | No, on request: `RUN_LSTM = True` at the top of the template |
 | Run tests automatically on GitHub? | No; tests run locally with `pytest` |
-| What the live forward test tracks | All four stocks; logistic regression for direction plus the volatility model chosen in phase 4; no LSTM |
+| What the live forward test tracks | All four stocks; logistic regression for direction plus logistic regression for move size (best on all four stocks in phase 4); no LSTM |
 | Google ticker | `GOOGL` (class A shares) |
 | Keep `notebooks/analysis.ipynb`? | Yes, locally only, as a frozen phase 1 snapshot; off GitHub, where it would duplicate `reports/SPY.ipynb`. It may stop running as `src/` changes |
 | Known bias | NVDA, AAPL and GOOGL were picked knowing they became huge winners; the reports will say buy-and-hold looks good partly in hindsight |
@@ -268,6 +341,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Baseline | A simple rule a model must beat to show it learned something |
 | Bonferroni correction | Dividing the 5% threshold by the number of comparisons, so that testing many things doesn't produce lucky "wins" |
 | Feature | An input to the model, such as the last 5 days' return |
+| GARCH | A standard model of volatility clustering: today's volatility depends on yesterday's move and yesterday's volatility. Used for the fake clustered prices |
 | Hindsight bias | Judging a choice by an outcome nobody could know at the time, such as picking stocks that are famous winners today |
 | Label (target) | What the model predicts: 1 for an up day tomorrow, 0 otherwise |
 | Leak (look-ahead) | Future information slipping into features or training, which makes results look better than they could be in real life |
@@ -282,12 +356,15 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Sharpe ratio | Return per unit of volatility; higher is better |
 | Virtual environment (.venv) | A private set of Python libraries for this project only |
 | Volatility clustering | Calm days tend to follow calm days, wild days follow wild days |
+| Volatility targeting | Holding less of an investment when it is expected to be wild, to keep risk steadier |
 | Walk-forward testing | Train on the past, test on the next period, step forward, repeat |
 
 ## Changelog
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 15 Oct 2026 | Four-stock run with Part 2 | Move size: 8 of 8 beat "same as today" after the correction; half-on-big: 0 of 8 beat luck. Logistic regression chosen as the move-size model for phase 6 |
+| 15 Oct 2026 | Phase 4 built | Move-size task in every report (Part 2) and in the comparison; new features, label, baselines, clustered-volatility fake prices, half-position backtest, luck check on Sharpe; 21 new tests (67 total), each new bug type checked by planting it; checked on the saved SPY data plus fake stocks |
 | 12 Oct 2026 | NVDA/GOOGL match checked | Identical "always up" accuracy traced to equal up-day counts by coincidence (issue 19) |
 | 12 Oct 2026 | First four-stock run | SPY, NVDA, AAPL, GOOGL run locally; results under Results so far; 0 of 8 accuracy passes, 1 of 8 backtest passes at 5% and 0 after the correction |
 | 12 Oct 2026 | `analysis.ipynb` kept locally | Untracked from GitHub with `git rm --cached` and listed in `.gitignore`; every earlier version stays in the repo's history. Fixed a `.gitignore` line-break problem on the way (issue 18) |

@@ -15,7 +15,10 @@ import run
 from src.data import make_random_walk
 from src.evaluate import get_models, walk_forward
 from src.features import build_dataset
-from src.report import comparison_table, load_summaries, safe_name, save_summary, summarize
+from src.evaluate import vol_baseline_predictions
+from src.features import VOL_FEATURES, build_vol_dataset
+from src.report import (comparison_table, half_on_big, load_summaries, safe_name, save_summary,
+                        summarize, summarize_vol)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -146,6 +149,7 @@ def test_run_rejects_negative_cost():
 
 def test_run_keeps_going_when_one_stock_fails(monkeypatch, capsys):
     """A bad ticker is reported, the others still run, and the exit code says something failed."""
+
     ran = []
 
     def fake_run_notebook(template, output, parameters):
@@ -181,3 +185,60 @@ def test_templates_are_saved_without_outputs():
     for name in ["template.ipynb", "comparison_template.ipynb"]:
         nb = nbformat.read(ROOT / "notebooks" / name, as_version=4)
         assert all(not c.get("outputs") for c in nb.cells if c.cell_type == "code")
+
+
+# ---------------------------- Part 2: move size ------------------------------------
+
+def _vol_block(p_values, luck_shares):
+    return {
+        "test start": "2010-01-04", "test end": "2020-12-31", "test days": 2770,
+        "share of big days": 0.5, "majority accuracy": 0.51, "same as today accuracy": 0.53,
+        "buy and hold": {"annual return": 0.10, "Sharpe ratio": 0.8, "max drawdown": -0.3},
+        "same as today strategy": {"annual return": 0.05, "Sharpe ratio": 0.4, "max drawdown": -0.25},
+        "models": {
+            f"model {i}": {"accuracy": 0.60, "predicted big": 0.4, "p-value vs same as today": p,
+                           "strategy": {"annual return": 0.08, "Sharpe ratio": 0.7, "max drawdown": -0.2},
+                           "share of random >=": luck}
+            for i, (p, luck) in enumerate(zip(p_values, luck_shares))
+        },
+    }
+
+
+def test_vol_summary_has_the_headline_numbers():
+    data = build_vol_dataset(make_random_walk(n_days=2200, seed=8))
+    test = data[data.index.year >= 2010]
+    preds = {name: walk_forward(m, data, 2010, features=VOL_FEATURES) for name, m in get_models().items()}
+    v = summarize_vol(test, preds, vol_baseline_predictions(test), luck_trials=20)
+    assert set(v["models"]) == {"Logistic regression", "Gradient boosting"}
+    assert 0 <= v["same as today accuracy"] <= 1
+    assert v["majority accuracy"] >= 0.5
+    for m in v["models"].values():
+        assert set(m["strategy"]) == {"annual return", "Sharpe ratio", "max drawdown"}
+        assert 0 <= m["p-value vs same as today"] <= 1
+    json.dumps(v)
+
+
+def test_half_on_big():
+    assert list(half_on_big(pd.Series([0, 1, 1, 0]))) == [1.0, 0.5, 0.5, 1.0]
+
+
+def test_volatility_comparison_is_corrected_on_its_own():
+    s = _summary("A", [0.5, 0.5], [0.5, 0.5])
+    s["volatility"] = _vol_block([0.001, 0.02], [0.001, 0.9])
+    table, info = comparison_table([s], task="volatility")
+    assert info["comparisons"] == 2
+    assert info["corrected threshold"] == pytest.approx(0.025)
+    assert table.loc[("A", "model 0"), "accuracy edge (corrected)?"]
+    assert table.loc[("A", "model 1"), "accuracy edge (corrected)?"]      # 0.02 < 0.025
+    assert table.loc[("A", "model 0"), "edge"] == pytest.approx(0.60 - 0.53)
+    assert info["luck passes (corrected)"] == 1
+
+
+def test_old_summaries_without_move_size_say_what_to_do():
+    with pytest.raises(ValueError, match="python run.py OLD"):
+        comparison_table([_summary("OLD", [0.5], [0.5])], task="volatility")
+
+
+def test_unknown_task_is_refused():
+    with pytest.raises(ValueError, match="task must be"):
+        comparison_table([_summary("A", [0.5], [0.5])], task="price")

@@ -9,20 +9,21 @@ choose to refresh.
 drop_unfinished_day() removes today's row when the data was downloaded while
 the US market was still open, because that "close" is not final yet.
 
-Two kinds of fake prices, used as checks on the whole pipeline:
--   make_random_walk(): no pattern at all. A correct pipeline should score about
-  the same as "always up" on it. Clearly beating it means future information
-  is leaking in somewhere.
--   make_planted_pattern(): a known pattern built in on purpose. A working
-    pipeline should find it and clearly beat "always up". This proves the models
-    can detect a real pattern when one exists.
+Fake prices, used as checks on the whole pipeline:
+- make_random_walk(): no pattern at all, and every day equally wild. A correct
+  pipeline should find nothing in it, for direction or for move size. Clearly
+  beating the baselines means future information is leaking in somewhere.
+- make_planted_pattern(): a direction pattern built in on purpose. A working
+  pipeline should find it and clearly beat "always up".
+- make_volatility_clusters(): wild and calm spells built in on purpose. A
+  working pipeline should predict big vs. small moves on it.
 """
 
 
 from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
- 
+
 import numpy as np
 import pandas as pd
 
@@ -44,6 +45,7 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
 
     Returns a DataFrame indexed by date with Open, High, Low, Close, Volume.
     """
+
     DATA_DIR.mkdir(exist_ok=True)
     cache = DATA_DIR / f"{ticker}_from_{start}.csv"
 
@@ -72,7 +74,7 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
     prices = raw[PRICE_COLUMNS].dropna()
     prices.index = pd.to_datetime(prices.index)
     if prices.index.tz is not None:
-        prices.index = prices.index.tz_localize(None).normalize()  # keep the local trading date
+        prices.index = prices.index.tz_localize(None).normalize()           # keep the local trading date
     prices.index.name = "Date"
 
     prices = drop_unfinished_day(prices, datetime.now(timezone.utc))
@@ -82,10 +84,10 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
 
 def drop_unfinished_day(prices, downloaded_at):
     """Remove the last row if that trading day was still in progress.
- 
+
     prices:        daily prices indexed by date
     downloaded_at: when the data was fetched (a timezone-aware datetime)
- 
+
     If the last row is dated today (in New York) and the data was fetched
     before 4:30 pm New York time, its "close" is just the price at that
     moment, so the row is dropped.
@@ -100,10 +102,16 @@ def drop_unfinished_day(prices, downloaded_at):
     return prices
 
 
+
 # ---------------------------- fake prices ------------------------------------
 
 def _prices_from_returns(returns, start, daily_vol, rng):
-    """Build Open/High/Low/Close/Volume rows around a series of daily returns."""
+    """Build Open/High/Low/Close/Volume rows around a series of daily returns.
+
+    daily_vol sets how far High and Low stretch beyond Open and Close: one
+    number for every day, or one per day so wild days also swing more within
+    the day, as they do in real markets.
+    """
 
     n_days = len(returns)
     dates = pd.bdate_range(start=start, periods=n_days, name="Date")
@@ -136,7 +144,7 @@ def make_random_walk(n_days=5500, start="2005-01-03", daily_drift=0.0003,
 def make_planted_pattern(n_days=5500, start="2005-01-03", reversal_prob=0.6,
                          daily_vol=0.012, seed=0):
     """Fake daily prices with a known pattern built in: moves tend to reverse.
- 
+
     After an up day, the next day is a down day with probability
     reversal_prob (60% by default); after a down day, the next day is an up
     day with the same probability. Up and down days are equally common
@@ -153,3 +161,27 @@ def make_planted_pattern(n_days=5500, start="2005-01-03", reversal_prob=0.6,
     sizes = np.abs(rng.normal(0, daily_vol, n_days))
     returns = np.where(up, sizes, -sizes)
     return _prices_from_returns(returns, start, daily_vol, rng)
+
+
+def make_volatility_clusters(n_days=5500, start="2005-01-03", daily_vol=0.012,
+                             reaction=0.10, persistence=0.88, seed=0):
+    """Fake daily prices with wild and calm spells built in on purpose.
+
+    Each day's volatility depends on yesterday's: a big move today makes
+    tomorrow wilder (reaction), and wild periods fade only slowly
+    (persistence). This is the GARCH(1,1) model, a standard description of
+    real markets; 0.10 and 0.88 are typical values for a stock index.
+    Direction stays pure chance, so only move size is predictable.
+    daily_vol is the long-run average volatility.
+    """
+
+    rng = np.random.default_rng(seed)
+    base = daily_vol ** 2 * (1 - reaction - persistence)
+    variance = daily_vol ** 2
+    returns = np.empty(n_days)
+    vols = np.empty(n_days)
+    for t in range(n_days):
+        vols[t] = np.sqrt(variance)
+        returns[t] = rng.normal(0, vols[t])
+        variance = base + reaction * returns[t] ** 2 + persistence * variance
+    return _prices_from_returns(returns, start, vols, rng)

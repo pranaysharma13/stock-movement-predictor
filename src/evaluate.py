@@ -4,13 +4,16 @@ Testing models honestly.
 get_models()           the two models we compare
 first_test_year()      the first year with enough history before it to train on
 walk_forward()         train only on the past, predict the next year, step forward
-baseline_predictions() simple rules any model has to beat
+baseline_predictions() simple rules a direction model has to beat
+vol_baseline_predictions()  simple rules a move-size model has to beat
 accuracy_table()       accuracy with a 95% range, so you can tell an edge from noise
 accuracy_by_year()     how stable is the accuracy from year to year?
 backtest_table()       turn predictions into a trading rule and compare with buy-and-hold
-luck_check()           could the backtest result come from sitting out random days?
-"""
+luck_check()           could the backtest result come from picking random days?
 
+Everything here works for both tasks: "target" is whatever the dataset
+predicts (an up day, or a big day).
+"""
 
 
 import numpy as np
@@ -27,12 +30,12 @@ from .features import FEATURES
 TRADING_DAYS = 252
 
 
-# ---------------------------- models ------------------------------------
 
+# ---------------------------- models ------------------------------------
 
 def get_models():
     """Fresh, untrained models, keyed by display name."""
-    
+
     return {
         # Scaling puts every feature on the same footing before the
         # weighted sum, so the learned weights are comparable.
@@ -49,7 +52,7 @@ def get_models():
 
 def first_test_year(data, min_train_days=1000):
     """The first calendar year with at least min_train_days of data before it.
- 
+
     1,000 trading days is about four years. For SPY data starting in 2005
     this gives 2010; for a stock listed in 2015 it gives 2019 or 2020.
     """
@@ -72,7 +75,8 @@ def walk_forward(model, data, first_year=None, features=FEATURES):
     features: which feature columns the model sees (default: FEATURES).
 
     Returns a DataFrame indexed by date with:
-      prob_up: the model's probability that tomorrow is an up day
+      prob_up: the model's probability that target is 1 (an up day, or for
+               the move-size task, a big day)
       pred:    1 if prob_up > 0.5, else 0
     """
 
@@ -82,7 +86,7 @@ def walk_forward(model, data, first_year=None, features=FEATURES):
     years = sorted(y for y in data.index.year.unique() if y >= first_year)
     if not years:
         raise ValueError(f"No data from {first_year} onward to test on.")
- 
+
     chunks = []
     for year in years:
         train = data[data.index.year < year]
@@ -90,14 +94,14 @@ def walk_forward(model, data, first_year=None, features=FEATURES):
         fitted = clone(model).fit(train[features], train["target"])
         prob_up = fitted.predict_proba(test[features])[:, 1]
         chunks.append(pd.DataFrame({"prob_up": prob_up}, index=test.index))
- 
+
     preds = pd.concat(chunks)
     preds["pred"] = (preds["prob_up"] > 0.5).astype(int)
     return preds
 
 
-# ---------------------------- baselines ------------------------------------
 
+# ---------------------------- baselines ------------------------------------
 
 def baseline_predictions(data, seed=0):
     """Three simple rules, as 0/1 predictions for every row of data."""
@@ -117,26 +121,54 @@ def baseline_predictions(data, seed=0):
     )
 
 
+def vol_baseline_predictions(data):
+    """Simple rules for the move-size task, as 0/1 predictions (1 = big day).
+
+    data needs abs_ret_rel (today's move relative to the typical move).
+    """
+
+    return pd.DataFrame(
+        {
+            # The majority rule's two versions; whichever is right more often
+            # is the bar a model must clear just to be better than guessing.
+            "Always small": 0,
+            "Always big": 1,
+            # Volatility clustering in one line: if today was big, tomorrow
+            # will be too. This is the real bar for the move-size task.
+            "Same as today": (data["abs_ret_rel"] > 1).astype(int),
+        },
+        index=data.index,
+    )
+
+
+
 # ---------------------------- accuracy ------------------------------------
 
-
-def accuracy_table(predictions, target):
+def accuracy_table(predictions, target, baseline=None):
     """Compare several sets of 0/1 predictions against the true labels.
 
     predictions: dict of {name: Series of 0/1}
     target:      Series of true 0/1 labels for the same days
+    baseline:    name of the prediction every method must beat. None means
+                 "always predict 1" (always up, for direction).
 
     Columns:
       accuracy                 share of days predicted correctly
       range low / range high   95% range: accuracies inside it are
                                consistent with luck at this sample size
-      predicted up             share of days the method said "up"
+      predicted up             share of days the method predicted 1 ("up",
+                               or for move size, "big")
       p-value vs coin flip     chance of scoring this well by flipping coins
       beats always-up?         True only if even the low end of the range
                                is above the "always up" accuracy
+                               (named "beats <baseline>?" when one is given)
     """
 
-    always_up = target.mean()
+    if baseline is None:
+        bar, bar_column = target.mean(), "beats always-up?"
+    else:
+        bar = (pd.Series(predictions[baseline]).reindex(target.index) == target).mean()
+        bar_column = f"beats {baseline.lower()}?"
     rows = {}
     for name, pred in predictions.items():
         pred = pd.Series(pred).reindex(target.index)
@@ -150,14 +182,13 @@ def accuracy_table(predictions, target):
             "range high": acc + half_width,
             "predicted up": pred.mean(),
             "p-value vs coin flip": binomtest(k, n, 0.5, alternative="greater").pvalue,
-            "beats always-up?": bool(acc - half_width > always_up),
+            bar_column: bool(acc - half_width > bar),
         }
     return pd.DataFrame(rows).T
 
 
 def accuracy_by_year(predictions, target):
     """Accuracy of each method in each calendar year."""
-
     hits = pd.DataFrame(
         {name: pd.Series(p).reindex(target.index) == target
          for name, p in predictions.items()}
@@ -165,15 +196,17 @@ def accuracy_by_year(predictions, target):
     return hits.groupby(hits.index.year).mean()
 
 
-# ---------------------------- backtest ------------------------------------
 
+# ---------------------------- backtest ------------------------------------
 
 def backtest(position, next_ret, cost=0.001):
     """Daily returns of a simple long-or-cash strategy.
 
-    position: 1 = hold the stock into tomorrow, 0 = sit in cash.
-              Decided at today's close; earns tomorrow's return (next_ret).
-    cost:     charged on every buy or sell (0.001 = 0.1% of the trade).
+    position: share of money in the stock for tomorrow: 1 = fully invested,
+              0 = all cash, 0.5 = half and half. Decided at today's close;
+              earns that share of tomorrow's return (next_ret).
+    cost:     charged on the amount bought or sold (0.001 = 0.1% of the
+              trade), so moving from 1 to 0.5 costs half a full trade.
 
     Simplification: assumes you can trade at exactly the closing price.
     """
@@ -201,9 +234,11 @@ def performance(daily_returns):
 def backtest_table(positions, next_ret, cost=0.001):
     """Backtest several strategies at once.
 
-    positions: dict of {name: Series of 0/1 positions}
+    positions: dict of {name: Series of positions} (see backtest())
 
-    Returns (stats table, DataFrame of daily returns per strategy).
+    Returns (stats table, DataFrame of daily returns per strategy). "days in
+    market" is the average position (0.75 = three quarters invested on
+    average); "trades" counts every change of position.
     """
 
     stats, returns = {}, {}
@@ -212,7 +247,7 @@ def backtest_table(positions, next_ret, cost=0.001):
         r = backtest(pos, next_ret, cost)
         row = performance(r)
         row["days in market"] = pos.mean()
-        row["trades"] = int(pos.diff().abs().fillna(pos.iloc[0]).sum())
+        row["trades"] = int((pos.diff().fillna(pos.iloc[0]) != 0).sum())
         stats[name] = row
         returns[name] = r
     table = pd.DataFrame(stats).T
@@ -220,35 +255,44 @@ def backtest_table(positions, next_ret, cost=0.001):
     return table, pd.DataFrame(returns)
 
 
-def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0):
-    """Could a strategy's result come from sitting out random days?
- 
-    Keeps the same number of days in cash as the strategy, but picks those
-    days at random, many times over. The strategy pays its trading cost; the
-    random versions trade for free. Random cash days are scattered, so
-    charging them costs would make them trade far more than the strategy and
-    look worse than they are. Letting them trade free is generous to luck,
-    which makes this a strict test. Returns:
-      annual return:       the strategy's own annual return
-      random median:       the typical annual return of the random versions
+def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0,
+               metric="annual return"):
+    """Could a strategy's result come from picking random days?
+
+    Keeps the same number of days below a full position as the strategy (cash
+    days, or half-position days), but picks those days at random, many times
+    over. The strategy pays its trading cost; the random versions trade for
+    free. Random days are scattered, so charging them costs would make them
+    trade far more than the strategy and look worse than they are. Letting
+    them trade free is generous to luck, which makes this a strict test.
+
+    metric: which number from performance() to compare, e.g. "annual return"
+            (direction) or "Sharpe ratio" (move size, where the aim is less
+            risk per unit of return rather than more return).
+
+    Returns:
+      <metric>:            the strategy's own value
+      random median:       the typical value of the random versions
       share of random >=:  how often a random version did at least as well
                            (around 0.05 or less = hard to explain by luck)
-      cash days:           how many days the strategy sat out
+      cash days:           how many days the strategy held less than a full position
     """
 
     position = pd.Series(position).reindex(next_ret.index).fillna(0)
-    n_cash = int((position == 0).sum())
-    actual = performance(backtest(position, next_ret, cost))["annual return"]
+    reduced = position < 1
+    n_cash = int(reduced.sum())
+    reduced_values = position[reduced].to_numpy()
+    actual = performance(backtest(position, next_ret, cost))[metric]
     rng = np.random.default_rng(seed)
-    random_returns = []
+    random_values = []
     for _ in range(n_trials):
-        random_pos = pd.Series(1, index=next_ret.index)
-        random_pos.iloc[rng.choice(len(next_ret), n_cash, replace=False)] = 0
-        random_returns.append(performance(backtest(random_pos, next_ret, cost=0))["annual return"])
-    random_returns = np.array(random_returns)
+        random_pos = pd.Series(1.0, index=next_ret.index)
+        random_pos.iloc[rng.choice(len(next_ret), n_cash, replace=False)] = reduced_values
+        random_values.append(performance(backtest(random_pos, next_ret, cost=0))[metric])
+    random_values = np.array(random_values)
     return {
-        "annual return": actual,
-        "random median": float(np.median(random_returns)),
-        "share of random >=": float((random_returns >= actual).mean()),
+        metric: actual,
+        "random median": float(np.median(random_values)),
+        "share of random >=": float((random_values >= actual).mean()),
         "cash days": n_cash,
     }

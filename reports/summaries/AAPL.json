@@ -7,7 +7,7 @@
   "always up accuracy": 0.5308202939781888,
   "buy and hold": {
     "annual return": 0.26800302590419967,
-    "Sharpe ratio": 0.9861876055281349,
+    "Sharpe ratio": 0.9861876055281344,
     "max drawdown": -0.4379715358975719
   },
   "models": {
@@ -15,9 +15,9 @@
       "accuracy": 0.5293978188715031,
       "predicted up": 0.9321953532479849,
       "p-value vs always up": 0.5795911602637542,
-      "annual return": 0.22528238281209667,
-      "Sharpe ratio": 0.916215727654405,
-      "max drawdown": -0.47579493959638297,
+      "annual return": 0.225282382812096,
+      "Sharpe ratio": 0.9162157276544043,
+      "max drawdown": -0.4757949395963833,
       "cash days": 286,
       "share of random >=": 0.8675
     },
@@ -25,11 +25,53 @@
       "accuracy": 0.5135135135135135,
       "predicted up": 0.6925082977714556,
       "p-value vs always up": 0.9882926927725207,
-      "annual return": 0.09689964650306515,
-      "Sharpe ratio": 0.5162124553226933,
-      "max drawdown": -0.5018595777533194,
+      "annual return": 0.09689964650306493,
+      "Sharpe ratio": 0.516212455322693,
+      "max drawdown": -0.5018595777533199,
       "cash days": 1297,
       "share of random >=": 0.989
+    }
+  },
+  "volatility": {
+    "test start": "2010-01-04",
+    "test end": "2026-10-09",
+    "test days": 4218,
+    "share of big days": 0.4957325746799431,
+    "majority accuracy": 0.504267425320057,
+    "same as today accuracy": 0.5301090564248458,
+    "buy and hold": {
+      "annual return": 0.26800302590419967,
+      "Sharpe ratio": 0.9861876055281344,
+      "max drawdown": -0.4379715358975719
+    },
+    "same as today strategy": {
+      "annual return": 0.1203435097060519,
+      "Sharpe ratio": 0.6491619378401149,
+      "max drawdown": -0.3417885950281917
+    },
+    "models": {
+      "Logistic regression": {
+        "accuracy": 0.5813181602655287,
+        "predicted big": 0.46633475580844,
+        "p-value vs same as today": 1.3005362272446372e-11,
+        "strategy": {
+          "annual return": 0.20393755019174642,
+          "Sharpe ratio": 1.0137924785084957,
+          "max drawdown": -0.34630423783784714
+        },
+        "share of random >=": 0.1605
+      },
+      "Gradient boosting": {
+        "accuracy": 0.5621147463252727,
+        "predicted big": 0.48933143669985774,
+        "p-value vs same as today": 1.6207207686223707e-05,
+        "strategy": {
+          "annual return": 0.1599624677649336,
+          "Sharpe ratio": 0.84039063268815,
+          "max drawdown": -0.395505228386576
+        },
+        "share of random >=": 0.882
+      }
     }
   }
 }

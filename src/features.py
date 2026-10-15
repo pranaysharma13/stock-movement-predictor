@@ -1,11 +1,15 @@
 """
-Turning prices into model inputs.
+Turning prices into model inputs, for two prediction tasks.
+
+Part 1, direction: will tomorrow close higher than today?
+    make_features(), build_dataset(), FEATURES
+Part 2, move size: will tomorrow's move (up or down) be bigger than usual?
+    make_vol_features(), build_vol_dataset(), VOL_FEATURES
 
 The rule that matters most: every feature for day t may only use information
 available at the close of day t. The label is the one thing allowed to look
-forward: did the price rise from day t's close to day t+1's close?
+forward, to day t+1's close.
 """
-
 
 
 import numpy as np
@@ -19,6 +23,7 @@ ALL_FEATURES = [
     "vol_20d",
     "volume_ratio",
 ]
+
 
 # The ones the models use: one per idea, so no two measure nearly the same thing.
 # Left out because they overlap with a kept feature (correlation on SPY 2005-2026):
@@ -78,4 +83,58 @@ def build_dataset(prices):
     data["next_ret"] = close.shift(-1) / close - 1
     data = data.dropna()
     data["target"] = (data["next_ret"] > 0).astype(int)
+    return data
+
+
+# ---------------------------- Part 2: move size ------------------------------------
+
+# How many past days define this stock's "typical" daily move (about a year).
+TYPICAL_WINDOW = 250
+
+# Every feature is measured relative to the stock's typical move, like the
+# label, so "big" means the same thing for a calm fund and a wild stock.
+VOL_FEATURES = [
+    "abs_ret_rel",   # today's move size
+    "vol_5d_rel",    # how jumpy the last week was
+    "vol_20d_rel",   # how jumpy the last month was
+    "range_rel",     # how far the price swung within today (high to low)
+    "volume_ratio",  # today's volume vs. its 20-day average
+]
+
+
+def make_vol_features(prices):
+    """Move-size features, plus typical_move: the median size of a daily move
+    over the past TYPICAL_WINDOW days, up to and including today."""
+
+    close = prices["Close"]
+    daily_ret = close / close.shift(1) - 1
+    typical = daily_ret.abs().rolling(TYPICAL_WINDOW).median()
+
+    f = pd.DataFrame(index=prices.index)
+    f["typical_move"] = typical
+    f["abs_ret_rel"] = daily_ret.abs() / typical
+    f["vol_5d_rel"] = daily_ret.rolling(5).std() / typical
+    f["vol_20d_rel"] = daily_ret.rolling(20).std() / typical
+    f["range_rel"] = (prices["High"] - prices["Low"]) / close / typical
+    f["volume_ratio"] = prices["Volume"] / prices["Volume"].rolling(20).mean() - 1
+    return f.replace([np.inf, -np.inf], np.nan)
+
+
+def build_vol_dataset(prices):
+    """Move-size features plus what the model has to predict.
+
+    Adds:
+      next_ret: return from today's close to tomorrow's close (for the backtest)
+      target:   1 if tomorrow's move, up or down, is bigger than today's
+                typical_move (a "big" day), otherwise 0
+
+    The threshold uses only past days, so it's known at today's close. The
+    first ~250 days are dropped while the typical move warms up.
+    """
+
+    data = make_vol_features(prices)
+    close = prices["Close"]
+    data["next_ret"] = close.shift(-1) / close - 1
+    data = data.dropna()
+    data["target"] = (data["next_ret"].abs() > data["typical_move"]).astype(int)
     return data

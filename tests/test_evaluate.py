@@ -1,7 +1,7 @@
 """
-Tests for src/evaluate.py: walk-forward never sees the future, the backtest
-arithmetic is right, and the whole pipeline finds a planted pattern but
-finds nothing in pure noise.
+Tests for src/evaluate.py, for both tasks: walk-forward never sees the
+future, the backtest arithmetic is right, and the whole pipeline finds a
+planted pattern but finds nothing in pure noise.
 """
 
 
@@ -10,10 +10,11 @@ import pandas as pd
 import pytest
 from sklearn.base import BaseEstimator, ClassifierMixin
 
-from src.data import make_planted_pattern, make_random_walk
-from src.evaluate import (accuracy_table, backtest, baseline_predictions, first_test_year,
-                          get_models, luck_check, performance, walk_forward)
-from src.features import ALL_FEATURES, FEATURES, build_dataset
+from src.data import make_planted_pattern, make_random_walk, make_volatility_clusters
+from src.evaluate import (accuracy_table, backtest, backtest_table, baseline_predictions,
+                          first_test_year, get_models, luck_check, performance,
+                          vol_baseline_predictions, walk_forward)
+from src.features import ALL_FEATURES, FEATURES, VOL_FEATURES, build_dataset, build_vol_dataset
 
 
 @pytest.fixture(scope="module")
@@ -123,7 +124,7 @@ def test_accuracy_table_on_a_tiny_example():
 
 def test_backtest_arithmetic_by_hand():
     """Hold, sell, buy back, hold. Cost 0.1% on each of the three trades."""
-    
+
     days = pd.bdate_range("2020-01-01", periods=4)
     next_ret = pd.Series([0.10, -0.05, 0.02, 0.01], index=days)
     position = pd.Series([1, 0, 1, 1], index=days)
@@ -147,7 +148,7 @@ def test_performance_by_hand():
 
 def test_luck_check_spots_a_perfect_strategy(noise):
     """Sitting out exactly the down days can't be matched by random cash days."""
-    
+
     test = noise[noise.index.year >= 2010]
     perfect = (test["next_ret"] > 0).astype(int)
     result = luck_check(perfect, test["next_ret"], n_trials=200)
@@ -156,6 +157,7 @@ def test_luck_check_spots_a_perfect_strategy(noise):
 
 
 # ---------------------------- the pipeline checks ------------------------------------
+
 def _check(data):
     start = first_test_year(data)
     test = data[data.index.year >= start]
@@ -178,3 +180,86 @@ def test_pipeline_finds_nothing_in_noise(noise):
     always_up = table.loc["Always up", "accuracy"]
     assert not table.loc["Logistic regression", "beats always-up?"]
     assert abs(model - always_up) < 0.04
+
+
+# ---------------------------- Part 2: move size ------------------------------------
+
+
+@pytest.fixture(scope="module")
+def calm_and_wild():
+    return build_vol_dataset(make_volatility_clusters(n_days=3000, seed=3))
+
+
+@pytest.fixture(scope="module")
+def constant_vol():
+    return build_vol_dataset(make_random_walk(n_days=3000, seed=3))
+
+
+def test_vol_baselines(calm_and_wild):
+    base = vol_baseline_predictions(calm_and_wild)
+    assert (base["Always small"] == 0).all() and (base["Always big"] == 1).all()
+    assert base["Same as today"].equals((calm_and_wild["abs_ret_rel"] > 1).astype(int))
+
+
+def test_accuracy_table_against_a_named_baseline():
+    days = pd.bdate_range("2020-01-01", periods=4)
+    target = pd.Series([1, 0, 1, 0], index=days)
+    table = accuracy_table(
+        {"model": pd.Series([1, 0, 1, 0], index=days), "Same as today": pd.Series([1, 1, 1, 1], index=days)},
+        target, baseline="Same as today",
+    )
+    assert "beats same as today?" in table.columns
+    assert "beats always-up?" not in table.columns
+    assert table.loc["Same as today", "accuracy"] == pytest.approx(0.5)
+
+
+def test_backtest_with_half_positions_by_hand():
+    """Full, half, half, full. Moving between 1 and 0.5 trades half the money."""
+
+    days = pd.bdate_range("2020-01-01", periods=4)
+    next_ret = pd.Series([0.10, -0.04, 0.02, 0.01], index=days)
+    position = pd.Series([1, 0.5, 0.5, 1], index=days)
+    daily = backtest(position, next_ret, cost=0.001)
+    expected = [0.10 - 0.001,           # buy the full position
+                -0.02 - 0.0005,         # sell half: half the -4% day
+                0.01,                   # stay at half: half the +2% day, no trade
+                0.01 - 0.0005]          # buy the other half back
+    np.testing.assert_allclose(daily.values, expected)
+
+
+def test_backtest_table_counts_every_position_change():
+    days = pd.bdate_range("2020-01-01", periods=5)
+    next_ret = pd.Series(0.0, index=days)
+    stats, _ = backtest_table({"x": pd.Series([1, 0.5, 0.5, 1, 0.5], index=days)}, next_ret)
+    assert stats.loc["x", "trades"] == 4          # initial buy + three changes
+    assert stats.loc["x", "days in market"] == pytest.approx(0.7)
+
+
+def test_luck_check_with_half_positions_and_sharpe(calm_and_wild):
+    test = calm_and_wild[calm_and_wild.index.year >= 2010]
+    position = 1 - 0.5 * (test["abs_ret_rel"] > 1).astype(int)
+    result = luck_check(position, test["next_ret"], n_trials=50, metric="Sharpe ratio")
+    assert "Sharpe ratio" in result
+    assert result["cash days"] == int((position < 1).sum())
+    assert 0 <= result["share of random >="] <= 1
+
+
+def _vol_check(data):
+    start = first_test_year(data)
+    test = data[data.index.year >= start]
+    preds = {"Logistic regression": walk_forward(get_models()["Logistic regression"], data, start,
+                                                 features=VOL_FEATURES)["pred"]}
+    preds.update(vol_baseline_predictions(test).to_dict("series"))
+    return accuracy_table(preds, test["target"], baseline="Same as today")
+
+
+def test_pipeline_finds_volatility_clusters(calm_and_wild):
+    table = _vol_check(calm_and_wild)
+    assert table.loc["Logistic regression", "beats same as today?"]
+    assert table.loc["Logistic regression", "accuracy"] > 0.55
+
+
+def test_pipeline_finds_nothing_when_volatility_is_constant(constant_vol):
+    table = _vol_check(constant_vol)
+    assert not table.loc["Logistic regression", "beats same as today?"]
+    assert abs(table.loc["Logistic regression", "accuracy"] - 0.5) < 0.04

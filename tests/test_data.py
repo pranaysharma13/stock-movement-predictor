@@ -16,8 +16,7 @@ import pytest
 
 import src.data as data_module
 from src.data import (NEW_YORK, PRICE_COLUMNS, drop_unfinished_day, load_prices,
-                      make_planted_pattern, make_random_walk)
-
+                      make_planted_pattern, make_random_walk, make_volatility_clusters)
 
 
 def _prices_ending(last_day, n=5):
@@ -27,6 +26,7 @@ def _prices_ending(last_day, n=5):
 
 def _new_york(when):
     return datetime.fromisoformat(when).replace(tzinfo=NEW_YORK)
+
 
 
 # ---------------------------- unfinished day ------------------------------------
@@ -46,6 +46,7 @@ def test_keeps_today_once_the_market_has_closed(when):
 
 def test_keeps_yesterdays_close_during_today_trading():
     """Downloaded mid-morning, before today's row exists: nothing to drop."""
+
     prices = _prices_ending("2026-10-08")
     assert drop_unfinished_day(prices, _new_york("2026-10-09 10:00")).equals(prices)
 
@@ -85,7 +86,7 @@ def test_download_path_with_fake_yfinance(tmp_path, monkeypatch):
 
     assert list(prices.columns) == PRICE_COLUMNS
     assert prices.index.tz is None
-    assert prices.index[0] == pd.Timestamp("2010-01-04")            # local trading date, not shifted
+    assert prices.index[0] == pd.Timestamp("2010-01-04")   # local trading date, not shifted
     assert (tmp_path / "SPY_from_2010-01-01.csv").exists()
 
 
@@ -100,7 +101,7 @@ def test_download_that_returns_nothing_raises_a_clear_error(tmp_path, monkeypatc
 
 # ---------------------------- fake prices ------------------------------------
 
-@pytest.mark.parametrize("make", [make_random_walk, make_planted_pattern])
+@pytest.mark.parametrize("make", [make_random_walk, make_planted_pattern, make_volatility_clusters])
 def test_fake_prices_look_like_real_prices(make):
     prices = make(n_days=500)
     assert list(prices.columns) == PRICE_COLUMNS
@@ -123,3 +124,30 @@ def test_random_walk_has_no_reversal_pattern():
     up = (close.pct_change() > 0).iloc[1:]
     reversed_ = (up != up.shift(1)).iloc[1:]
     assert reversed_.mean() == pytest.approx(0.50, abs=0.03)
+
+
+def _move_size_persistence(prices):
+    """Correlation between today's move size and tomorrow's."""
+
+    moves = prices["Close"].pct_change().abs().dropna()
+    return moves.corr(moves.shift(1))
+
+
+def test_volatility_clusters_have_wild_and_calm_spells():
+    """Big moves follow big moves in the clustered prices..."""
+
+    assert _move_size_persistence(make_volatility_clusters(n_days=5500)) > 0.1
+
+
+def test_random_walk_has_no_volatility_clusters():
+    """...but not in the random walk, where every day is equally wild."""
+
+    assert abs(_move_size_persistence(make_random_walk(n_days=5500))) < 0.05
+
+
+def test_volatility_clusters_keep_direction_random():
+    """Only move size is planted: up days stay about as common as down days."""
+
+    up = make_volatility_clusters(n_days=5500)["Close"].pct_change().dropna() > 0
+    assert up.mean() == pytest.approx(0.5, abs=0.03)
+    assert (up != up.shift(1)).iloc[1:].mean() == pytest.approx(0.5, abs=0.03)

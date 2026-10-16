@@ -11,12 +11,12 @@ Both are tested honestly:
 
 - **Walk-forward testing:** every prediction comes from a model trained only on earlier years.
 - **Real baselines:** models must beat "always predict up," not just a coin flip; for move size, they must beat the strongest simple rule we found.
-- **Paired test against rules:** a model and a rule predict the same days, so only the days they disagree count.
+- **Paired test against every baseline:** a model and a rule predict the same days, so only the days they disagree count. The same goes for the ranges in the comparison charts.
 - **Noise check:** every accuracy comes with a 95% range.
-- **Backtest with trading costs,** compared against buy-and-hold.
+- **Backtest with trading costs and interest on cash,** compared against buy-and-hold; Sharpe ratios use returns above the Treasury-bill rate.
 - **Luck check:** any backtest edge is compared with sitting out the same number of random days.
 - **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
-- **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar, because some will "win" by chance alone.
+- **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar (the Holm correction), because some will "win" by chance alone.
 - **Does it help?** Move-size predictions are turned into a strategy that halves the position on predicted big days, deciding daily or once a week, judged on risk (Sharpe ratio, worst drop) after trading costs.
 
 For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
@@ -52,7 +52,7 @@ The logic lives in `src/` as small, plain functions. The notebooks import them a
 
 ## How to run
 
-You need Python 3.10 or newer.
+You need Python 3.11 or newer.
 
 ### First time only
 
@@ -65,7 +65,10 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 pytest                           # optional: check everything works (a few seconds)
+pip freeze > requirements-lock.txt   # optional: record the exact versions you used
 ```
+
+`requirements-lock.txt` lists the exact version of every library. Libraries such as yfinance change often; `pip install -r requirements-lock.txt` recreates exactly the setup the reports were made with.
 
 ### Creating reports
 
@@ -73,10 +76,11 @@ pytest                           # optional: check everything works (a few secon
 python run.py SPY                       # one stock    -> reports/SPY.ipynb
 python run.py SPY NVDA AAPL GOOGL       # several      -> one report each + reports/comparison.ipynb
 python run.py AAPL --refresh            # re-download the latest prices first
+python run.py SPY NVDA --comparison-only   # rebuild only the comparison, from saved summaries
 python run.py --help                    # all options
 ```
 
-Each report takes about 45–50 seconds. The first run of a stock downloads its prices from 2005 to today and saves them in `data/`; later runs use that saved copy, so results stay the same until you `--refresh`. If a ticker fails (a typo, no internet), the others still run and the message says which one failed.
+Each report takes about 50 seconds. The first run of a stock downloads its prices from 2005 to today and saves them in `data/`; later runs use that saved copy, so results stay the same until you `--refresh`. Treasury-bill rates (`^IRX`) are downloaded and saved the same way. If a ticker fails (a typo, no internet), the others still run, the message says which one failed, and its last good report is left unchanged; the partly run notebook is saved as `reports/<TICKER>.partial.ipynb` so you can see where it stopped.
 
 Open a finished report in VS Code or with `jupyter notebook reports/NVDA.ipynb`. It already contains every table and chart; there's nothing to run.
 
@@ -85,8 +89,10 @@ Open a finished report in VS Code or with `jupyter notebook reports/NVDA.ipynb`.
 | `--start` | `2005-01-01` | First date of data |
 | `--first-test-year` | automatic | First year predicted; automatic picks the first year with about 4 years of history before it (2010 for these stocks) |
 | `--cost` | `0.001` | Cost per buy or sell in the backtest (0.1%) |
-| `--refresh` | off | Re-download prices before running |
+| `--refresh` | off | Re-download prices (and interest rates) before running |
 | `--no-comparison` | off | Skip the comparison when running several stocks |
+| `--comparison-only` | off | Don't re-run the stocks; rebuild the comparison from their saved summaries |
+| `--no-interest` | off | Cash earns nothing in the backtests (by default it earns the Treasury-bill rate) |
 
 ### Every time you come back
 
@@ -102,7 +108,9 @@ Then `python run.py ...` as above. Run `deactivate` when you're done, or just cl
 
 Edit `notebooks/template.ipynb` (or the code in `src/`), then run `python run.py` again to regenerate the reports. Edits made directly in a file in `reports/` are overwritten the next time that stock is run. Keep the template saved without outputs, so it stays small and clean.
 
-If you download while the US market is still open, today's row is left out automatically, because its price isn't final until the close (4 pm New York time).
+If you download before 6 pm New York time, today's row is left out automatically, because its prices may still change after the 4 pm close. Rows where High and Low don't contain Open and Close (an occasional glitch in Yahoo's data) are repaired, and each report lists them.
+
+Tickers without trading volume, such as `^VIX` or currency pairs, stop with a clear message: one of the features needs volume.
 
 ## Running the tests
 
@@ -116,12 +124,12 @@ It takes a few seconds and needs no internet: every test runs on small fake pric
 
 | Test file | What it checks |
 |---|---|
-| `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series |
-| `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
-| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest arithmetic matches hand calculations, including half positions; the paired test matches a hand calculation; weekly positions only change at week ends (holiday weeks included); the luck check works on returns, on Sharpe ratio and on whole weeks; both pipeline checks pass for both tasks |
-| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value against the rule it names; the lucky-winners correction counts properly, is applied to each task separately, and counts daily and weekly strategies; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
+| `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series; clear errors for prices without volume or with too little history |
+| `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
+| `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
+| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only` and `--no-interest` work; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
-The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day): each one makes at least one test fail.
+The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report): each one makes at least one test fail.
 
 ## Features
 
@@ -156,6 +164,7 @@ The baselines need no model: "same as today" (big tomorrow if today's move was b
 ## Limitations
 
 - The backtest assumes trades happen exactly at the closing price.
+- Cash earns the 13-week Treasury-bill yield, spread evenly over trading days; a real account would earn a little less.
 - Costs are a flat percentage; real costs vary.
 - Daily data only.
 - The daily half-on-big strategy switches between full and half positions often, so its result depends heavily on the assumed trading cost; the weekly version trades about a quarter as often.

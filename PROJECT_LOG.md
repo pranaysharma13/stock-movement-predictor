@@ -1,6 +1,6 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 16 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
+*Last updated: 16 October 2026 (phase 4.2). A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
 
 ## Overview
 
@@ -8,7 +8,7 @@ No model predicts tomorrow's direction better than "always predict up" on any of
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; two tasks (direction, and big vs. small moves) with 5 price-based features each; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–4.1 are built: fixes, 77 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Next: phase 5 (LSTM).
+- **Status:** phases 1–4.2 are built: fixes, 106 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Phase 4.2 fixed the findings of an independent code review: four bugs, consistent statistics (paired tests everywhere, the Holm correction) and interest on cash. Next: re-run the four stocks, then phase 5 (LSTM).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -20,7 +20,7 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Decision | Choice | Why |
 | --- | --- | --- |
 | What to predict | Direction: 1 if tomorrow's close is higher than today's, else 0 | A predicted-vs-actual price chart looks impressive even for a useless model, because tomorrow's price is always close to today's |
-| Data | Daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 4:30 pm New York time | Adjusted prices give the real return an investor got; an unfinished day's close isn't final |
+| Data | Daily prices, adjusted for dividends and splits, 1 Jan 2005 to today, via yfinance; today's row dropped if downloaded before 6 pm New York time; rows whose High and Low don't contain Open and Close are repaired and listed | Adjusted prices give the real return an investor got; Yahoo can still be adjusting a day's prices half an hour after the close |
 | Stocks | SPY, NVDA, AAPL, GOOGL; any Yahoo Finance symbol works | One broad fund plus three single stocks |
 | Data caching | First run of each stock downloads and saves `data/<TICKER>_from_2005-01-01.csv`; later runs load that file | Results stay the same between runs until you choose to refresh |
 | Project layout | Logic in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` fills it in and saves `reports/<TICKER>.ipynb`; tests in `tests/` | One template means every stock gets exactly the same analysis, and later phases appear in every report automatically |
@@ -28,15 +28,15 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Reports on GitHub | Yes, saved with all tables and charts; price data stays out | Visitors see results without running anything |
 | Features | 8 calculated; the models use 5: `ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio` | One per idea (momentum, trend, risk, activity); `ret_10d`, `ret_20d` and `dist_ma10` nearly duplicate kept ones |
 | Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM comes in phase 5 |
-| Testing | Walk-forward: train on all years before the test year, predict it, step forward; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for these stocks | Every prediction comes from a model that never saw that year; works for stocks with shorter histories |
+| Testing | Walk-forward: train on all years before the test year, predict it, step forward; the last training day is left out, because its label is the first test day's move; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for these stocks, the same for both parts | Every prediction comes from a model that never saw that year, not even one price from it; works for stocks with shorter histories |
 | Baselines | Coin flip, always up, repeat last move | Stocks rise on more than half of days, so "always up" is the real bar, not 50% |
-| Noise check | 95% range around each accuracy, a p-value against a coin flip, and (in the summary) a p-value against "always up" | Shows whether a difference could be luck |
-| Backtest | Hold the stock into tomorrow when the model says up, else cash; 0.1% cost per buy or sell; compared with buy-and-hold | Accuracy alone doesn't show whether a model would make money |
-| Luck check | The same number of cash days picked at random, 2,000 times; the random versions trade free | Shows whether a backtest edge could come from chance; free trading is generous to luck, so the test is strict |
-| Lucky-winners correction | In the comparison, a result must pass at 5% divided by the number of comparisons (Bonferroni); 4 stocks × 2 models = 8, so 0.63% | With 8 comparisons at 5%, about 0.4 pass by luck alone |
+| Noise check | 95% range around each accuracy, a p-value against a coin flip, and a paired p-value against the baseline ("always up" or a rule) | Shows whether a difference could be luck; the paired test only counts days where model and baseline disagree |
+| Backtest | Hold the stock into tomorrow when the model says up, else cash earning the 13-week Treasury-bill rate (`^IRX`); 0.1% cost per buy or sell; compared with buy-and-hold; Sharpe ratio on returns above cash | Accuracy alone doesn't show whether a model would make money; cash really earns interest, and Sharpe should reward risk, not interest |
+| Luck check | The same number of cash days picked at random, 2,000 times; the random versions trade free and earn the same interest; share = (count + 1) / 2,001, so never 0 | Shows whether a backtest edge could come from chance; free trading is generous to luck, so the test is strict |
+| Lucky-winners correction | Holm: the smallest p-value must clear 5% divided by the number of comparisons (0.63% for 8), the next 5% / 7, and so on, stopping at the first miss | With 8 comparisons at 5%, about 0.4 pass by luck alone; Holm keeps Bonferroni's guarantee and never passes fewer |
 | Hindsight note | Every report says how much $1 grew and warns that well-known winners look good partly in hindsight | NVDA, AAPL and GOOGL were picked knowing how they turned out |
 | Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
-| Automated tests | 77 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
+| Automated tests | 106 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
 | Move-size label (Part 2) | Big = tomorrow's move, up or down, larger than the median daily move over the previous 250 trading days | A fixed bar like 1% means something different for a calm fund and a wild stock; the past-year median adapts to each stock and era and gives about half big days |
 | Move-size features | Today's move size, 5- and 20-day volatility, today's high-low range, volume ratio; all relative to the typical move | All measure recent move size, on the same scale as the label |
 | Move-size baselines | Always small / always big; "same as today" (big tomorrow if today's move was bigger than usual); and, since phase 4.1, "Recent swing" (big tomorrow if today's high-to-low swing was wider than its median over the past 250 days) | "Same as today" turned out to be an easy bar. Recent swing is still one line with no fitting, but uses a better measure of how wild today was, so it is the real bar |
@@ -45,6 +45,7 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Move-size strategy | Full position on predicted calm days, half on predicted big days; judged on Sharpe ratio and worst drop; luck check on Sharpe ratio | Volatility targeting aims at less risk per unit of return, not more return |
 | Move-size pipeline checks | Constant-volatility prices (should find nothing) and GARCH clustered-volatility prices with index-like settings 0.10 / 0.88 (should find it) | Proves the move-size pipeline neither invents nor misses clustering |
 | Correction across stocks | Applied to each task separately: 8 direction and 8 move-size accuracy comparisons; the move-size luck check counts 16 (daily and weekly strategy for each), so its corrected bar is 5% / 16 | The two tasks answer different questions; every extra strategy tested is another chance for a lucky pass |
+| Python | 3.11 or newer (pandas 3.0 needs it); exact versions recorded with `pip freeze > requirements-lock.txt` | yfinance in particular changes its output often |
 | Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
@@ -59,7 +60,8 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 | range low / range high | The 95% range: accuracies inside it are consistent with luck at this many days | If two methods' ranges overlap heavily, you can't tell them apart |
 | predicted up | Share of days the method said "up" | Near 100% means the model mostly learned "always up", not a pattern |
 | p-value vs coin flip | Chance of scoring this well by flipping coins | Weak test: "Always up" passes it too, because markets drift upward |
-| beats always-up? | True only if even the low end of the range is above "Always up" | The honest test of a real edge |
+| p-value vs always up | Paired test: only days the model says "down" can differ from "always up"; the chance of being right on that many of them by luck | Small is good |
+| beats always up? | True if that p-value is at most 0.05 | The honest test of a real edge |
 
 ### Backtest table (notebook section 5)
 
@@ -68,7 +70,7 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 | total return | Growth over the whole test period; 8.22 means +822%, so $1 became $9.22 | Compare with buy-and-hold |
 | annual return | The same growth expressed per year | The main money comparison |
 | annual volatility | How much returns swing in a typical year | Lower is calmer, but only matters next to return |
-| Sharpe ratio | Return per unit of volatility | Higher is better; a fair way to compare strategies that hold the stock different amounts of time |
+| Sharpe ratio | Return above what cash earns, per unit of volatility | Higher is better; a fair way to compare strategies that hold the stock different amounts of time |
 | max drawdown | Worst fall from a peak to a low; -0.34 means -34% | How painful the worst stretch was |
 | days in market | Share of days the strategy held the stock | Time out of the market misses up days |
 | trades | Number of buys and sells | More trades means more costs |
@@ -81,7 +83,7 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 - **Growth of $1:** the backtest as a picture, on a log scale so equal percentage moves look the same size.
 - **Cost table:** annual return at 0%, 0.05%, 0.1% and 0.2% per trade. An edge that only exists when trading is free isn't real.
 - **Luck check (section 5):** "share of random >=" is how often random cash days did at least as well; about 0.05 or less is hard to explain by luck. The biggest days avoided and missed show whether a few extreme days drive the result.
-- **Pipeline checks (section 6):** on pure noise, models should land near "Always up"; on the planted pattern, both should show True in "beats always-up?".
+- **Pipeline checks (section 6):** on pure noise, models should land near "Always up"; on the planted pattern, both should show True in "beats always up?".
 - **Logistic regression weights (section 7):** positive pushes toward "up", negative toward "down". With five non-overlapping features, each bar can be read on its own.
 
 ### Comparison report (`reports/comparison.ipynb`)
@@ -89,9 +91,9 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 | Part | What it shows | What to look for |
 | --- | --- | --- |
 | Test periods | Each stock's test dates, "always up" accuracy and buy-and-hold return | Stocks with shorter histories start testing later |
-| Edge chart | Each model's accuracy minus "always up", with its 95% range | A range crossing zero means the edge could be luck |
+| Edge chart | Each model's accuracy minus "always up", with the 95% range of that difference from the paired counts | A range crossing zero means the edge could be luck |
 | p-value vs always up | Chance of an accuracy this high if the model were no better than "always up" | Small is good, but see the corrected column |
-| 5% vs corrected columns | Whether a result passes as a single test, and after dividing 5% by the number of comparisons | Only corrected passes count as evidence |
+| 5% vs corrected columns | Whether a result passes as a single test, and after the Holm correction | Only corrected passes count as evidence |
 | Luck count | How many passes luck alone would produce, next to the actual passes | Passes close to the luck count mean nothing |
 
 ### Part 2: move size (report sections 8–12)
@@ -112,7 +114,25 @@ In the comparison, Part 2 now shows two edge charts (against "same as today", th
 
 ## Results so far
 
-Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule; on single stocks, logistic regression beats it by a small margin. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+The four-stock tables below were made before phase 4.2, which changes some numbers slightly (paired tests in Part 1, Holm, interest on cash); the re-run will be added here. Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule; on single stocks, logistic regression beats it by a small margin. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+
+### After phase 4.2: SPY check, without interest on cash
+
+Run on the saved SPY CSV on 16 October 2026 with `--no-interest`, to see what the other fixes change on their own. Real Treasury-bill rates can't be downloaded in Claude's workspace, so the numbers with interest come from the next local run.
+
+| Number | Before 4.2 | After 4.2 | Why |
+| --- | --- | --- | --- |
+| Logistic regression, direction p-value vs always up | 0.56 | 0.73 | Paired test (64 "down" days: 30 right, 34 wrong) |
+| Gradient boosting, direction accuracy | 52.8% | 52.7% | Last training day left out |
+| Logistic regression, move-size accuracy | 61.6% | 61.7% | Last training day left out |
+| Gradient boosting, move-size accuracy | 61.1% | 61.2% | Last training day left out |
+| Logistic regression, weekly Sharpe | 0.85 | 0.86 | Last training day left out |
+| Gradient boosting, weekly Sharpe | 0.90 | 0.87 | Last training day left out |
+| Luck share, logistic regression direction | 0.0475 | 0.048 | Now (count + 1) / 2,001 |
+
+- **No conclusion changes.**
+- **Gradient boosting is fragile:** leaving out one training day per year (17 days in all) changes its move-size predictions on 146 of 4,216 days, 38 of them weekly decision days. Logistic regression barely moves.
+- **Repaired rows:** 3 SPY rows had a High or Low that didn't contain the Open or Close (26 Oct 2007, 31 Jul 2012, 19 Jan 2018).
 
 ### After phase 4.1: four stocks against the Recent swing rule
 
@@ -292,10 +312,25 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Twenty-two issues so far: nineteen fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Newest first.
+Thirty-seven issues so far: thirty-two fixed or worked around, two open (steps for me), one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 37 | Small inconsistencies: cache file names didn't use the safe ticker name; `walk_forward`'s column was called `prob_up` even for big days; missing predictions were silently counted as wrong; trailing spaces; no way to rebuild only the comparison | 16 Oct 2026 | Fixed | Phase 4.2: safe names (`^IRX` → `_IRX_from_…csv`); column renamed `prob`; missing predictions raise an error; `--comparison-only` |
+| 36 | The README said Python 3.10, but pandas 3.0 needs 3.11; no record of exact library versions | 16 Oct 2026 | Open | README now says 3.11; on my side: `pip freeze > requirements-lock.txt` and commit it |
+| 35 | `.DS_Store` is committed even though `.gitignore` lists it | 16 Oct 2026 | Open | On my side: `git rm --cached .DS_Store`, then commit |
+| 34 | The weekly strategy treated the last day in the data as a week end, even mid-week | 16 Oct 2026 | Fixed | The last day only counts as a week end on a Friday |
+| 33 | Yahoo was still adjusting a row downloaded at 4:36 pm (Open above High); a few old SPY rows had High or Low not containing Open or Close | 16 Oct 2026 | Fixed | Cutoff moved to 6 pm New York time; such rows are repaired (High and Low widened; Close never changed) and listed in each report |
+| 32 | When predicting year Y, the last training row's label used the first closing price of year Y | 16 Oct 2026 | Fixed | That day is left out of each training set; negligible for logistic regression, but it changes gradient boosting's predictions on 146 SPY days |
+| 31 | Cash earned nothing in the backtests, and the Sharpe ratio ignored interest | 16 Oct 2026 | Fixed | Cash earns the 13-week Treasury-bill rate (`^IRX`); Sharpe uses returns above cash; `--no-interest` switches it off |
+| 30 | The luck check could report a share of exactly 0, as if luck were impossible | 16 Oct 2026 | Fixed | Share = (count + 1) / (trials + 1) |
+| 29 | Bonferroni is stricter than needed | 16 Oct 2026 | Fixed | Holm correction: same guarantee, never fewer passes; same answers on the current results |
+| 28 | The comparison charts' error bars showed each model's own accuracy range, not the range of its difference from the baseline, so a bar could cross zero while the table said "significant" | 16 Oct 2026 | Fixed | Ranges now come from the paired counts saved in each summary |
+| 27 | Part 1 judged models against "always up" three different ways (range in the table, one-sample test in the summary, own range in the chart) | 16 Oct 2026 | Fixed | The paired test everywhere, as in Part 2; SPY logistic regression's p-value goes from 0.56 to 0.73 |
+| 26 | Tickers without volume (`^VIX`, currency pairs) gave an empty dataset and a confusing error | 16 Oct 2026 | Fixed | A clear error saying the volume feature needs volume |
+| 25 | The comparison's error handler could itself crash on an error with an empty message | 16 Oct 2026 | Fixed | Same guard as the per-stock handler |
+| 24 | A failed run overwrote the last good report with a partly run one | 16 Oct 2026 | Fixed | Reports are written to `<TICKER>.partial.ipynb` and replace the old one only on success |
+| 23 | `--first-test-year` only applied to Part 1; Part 2 always chose its own first year | 16 Oct 2026 | Fixed | Both parts use the same year; automatic = the later of the two automatic choices |
 | 22 | In the constant-volatility pipeline check, "Recent swing" showed True in "beats same as today?" (50.8% vs 49.4%): one rule beating another by chance, in a check that should find nothing | 16 Oct 2026 | Fixed | The "beats" columns in the pipeline checks are about the models, so they are now left empty for the rules |
 | 21 | On the fake prices, the Recent swing rule only reaches about 53%, against about 62% on SPY | 16 Oct 2026 | Workaround | The fake prices' intraday swing is mostly random noise around the day's move, unlike real prices. The pipeline checks are about the models, which behave as expected; the rule's own test only checks that it works on clustered volatility and finds nothing on constant volatility |
 | 20 | "Same as today" was an easy bar, and the move-size p-value compared the model's accuracy with the rule's as if the rule's were a fixed number | 15 Oct 2026 | Fixed | Phase 4.1: a one-feature check showed today's swing alone gets most of the way; added the Recent swing baseline and a paired test that only counts days where model and rule disagree |
@@ -363,6 +398,10 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **How you use a prediction can matter more than how good it is.** Deciding once a week instead of every day cut trades by about three quarters and lifted the strategy's Sharpe ratio more than any change of model did.
 
+**Get a second pair of eyes.** An independent review found four bugs and several inconsistencies that 77 passing tests had missed, because the tests only checked what had been thought of. Every finding now has a test of its own.
+
+**Small changes can expose a fragile model.** Leaving out 17 training days changed gradient boosting's predictions on 146 days; logistic regression barely moved. A model whose output depends on a handful of rows is fitting noise.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
@@ -376,6 +415,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [x] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
 - [x] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
 - [x] **Phase 4.1, a tougher bar:** "Recent swing" baseline, paired test against rules, weekly half-on-big strategy with a weekly luck check
+- [x] **Phase 4.2, review fixes:** four bugs, paired tests and Holm everywhere, interest on cash, data checks
 - [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
 - [ ] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's
 - [ ] **Phase 7, write-up:** result charts in the README; Conclusions written
@@ -388,11 +428,15 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Run tests automatically on GitHub? | No; tests run locally with `pytest` |
 | What the live forward test tracks | All four stocks; logistic regression for direction plus logistic regression for move size (best on all four stocks in phase 4); no LSTM |
 | Google ticker | `GOOGL` (class A shares) |
+| Interest on cash? | Yes: the 13-week Treasury-bill rate (`^IRX`), with Sharpe on returns above cash; `--no-interest` switches it off |
+| Correction for many tests | Holm (replaced Bonferroni in phase 4.2) |
 | Keep `notebooks/analysis.ipynb`? | Yes, locally only, as a frozen phase 1 snapshot; off GitHub, where it would duplicate `reports/SPY.ipynb`. It may stop running as `src/` changes |
 | Known bias | NVDA, AAPL and GOOGL were picked knowing they became huge winners; the reports will say buy-and-hold looks good partly in hindsight |
 
 ### My own tasks
 
+- [ ] `git rm --cached .DS_Store`, then commit (issue 35)
+- [ ] `pip freeze > requirements-lock.txt`, then commit (issue 36)
 - [ ] Experiment: `LogisticRegression(max_iter=1000, class_weight="balanced")` in `src/evaluate.py`; guess the outcome before running
 - [ ] Experiment: trade only when the model is confident, e.g. `prob_up > 0.55`
 - [ ] Write the Conclusions (phase 7)
@@ -405,9 +449,11 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Backtest | Replaying a trading rule on past data to see what it would have earned |
 | Baseline | A simple rule a model must beat to show it learned something |
 | Bonferroni correction | Dividing the 5% threshold by the number of comparisons, so that testing many things doesn't produce lucky "wins" |
+| Excess return | Return above what cash would have earned; the Sharpe ratio uses it |
 | Feature | An input to the model, such as the last 5 days' return |
 | GARCH | A standard model of volatility clustering: today's volatility depends on yesterday's move and yesterday's volatility. Used for the fake clustered prices |
 | Hindsight bias | Judging a choice by an outcome nobody could know at the time, such as picking stocks that are famous winners today |
+| Holm correction | A step-by-step version of Bonferroni: the smallest p-value must clear 5% / m, the next 5% / (m − 1), and so on, stopping at the first miss; same guarantee, never fewer passes |
 | Label (target) | What the model predicts: 1 for an up day tomorrow, 0 otherwise |
 | Leak (look-ahead) | Future information slipping into features or training, which makes results look better than they could be in real life |
 | LSTM | A neural network built for sequences; needs PyTorch or TensorFlow |
@@ -420,7 +466,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Random walk | Prices where every day's move is pure chance |
 | Recent swing | The one-line move-size rule: predict a big day when today's high-to-low swing was wider than its median over the past 250 trading days |
 | scikit-learn | The Python library that provides the models and data-preparation tools |
-| Sharpe ratio | Return per unit of volatility; higher is better |
+| Sharpe ratio | Return above cash per unit of volatility; higher is better |
+| Treasury bill (`^IRX`) | Short-term US government debt; its yield is the standard "risk-free" rate that cash earns |
 | Virtual environment (.venv) | A private set of Python libraries for this project only |
 | Volatility clustering | Calm days tend to follow calm days, wild days follow wild days |
 | Volatility targeting | Holding less of an investment when it is expected to be wild, to keep risk steadier |
@@ -430,6 +477,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 16 Oct 2026 | Phase 4.2 built | Fixes for an independent code review (issues 23–37): Part 2 uses `--first-test-year`; failed runs keep the last good report; `--comparison-only` and `--no-interest`; clear errors for tickers without volume; paired tests and Holm everywhere, with chart ranges from the paired counts; interest on cash and Sharpe on excess returns; last training day left out; 6 pm cutoff and High/Low repairs; luck share never 0. 29 new tests (106 total), checked by planting 18 bugs (3 missed at first, so 3 tests were added); checked end to end on SPY plus a fake stock |
 | 16 Oct 2026 | Four-stock run with phase 4.1 | Logistic regression beats Recent swing on NVDA, AAPL and GOOGL (3 of 8 at 5%, 1 of 8 after the correction) and ties on SPY; weekly beats daily in all 8 rows; 0 of 16 strategies pass the luck check |
 | 16 Oct 2026 | Phase 4.1 built | Recent swing baseline (`wide_range` column), paired test (`paired_p_value`), weekly strategy (`hold_for_week`) with a whole-week luck check; Part 2 of the report and the comparison judged against Recent swing; luck correction counts daily and weekly strategies; 10 new tests (77 total), checked by planting 7 bugs (one was missed at first, so a test was added); checked end to end on SPY plus a fake stock. On SPY the rule ties logistic regression (61.65% vs 61.62%) |
 | 15 Oct 2026 | Four-stock run with Part 2 | Move size: 8 of 8 beat "same as today" after the correction; half-on-big: 0 of 8 beat luck. Logistic regression chosen as the move-size model for phase 6 |

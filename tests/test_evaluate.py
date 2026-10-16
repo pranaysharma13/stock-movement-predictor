@@ -14,10 +14,10 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from src.data import make_planted_pattern, make_random_walk, make_volatility_clusters
 import src.evaluate as evaluate
 from src.evaluate import (accuracy_table, backtest, backtest_table, baseline_predictions,
-                          first_test_year, get_models, hold_for_week, luck_check,
-                          paired_p_value, performance, vol_baseline_predictions, walk_forward,
-                          week_blocks)
-from src.features import ALL_FEATURES, FEATURES, VOL_FEATURES, build_dataset, build_vol_dataset
+                          edge_half_width, first_test_year, get_models, hold_for_week, luck_check,
+                          paired_counts, paired_p_value, performance, vol_baseline_predictions,
+                          walk_forward, week_blocks)
+from src.features import ALL_FEATURES, VOL_FEATURES, build_dataset, build_vol_dataset
 
 
 @pytest.fixture(scope="module")
@@ -74,7 +74,7 @@ def test_walk_forward_runs_with_its_defaults(noise):
     """
 
     preds = walk_forward(get_models()["Logistic regression"], noise)
-    assert preds["prob_up"].between(0, 1).all()
+    assert preds["prob"].between(0, 1).all()
     assert set(preds["pred"].unique()) <= {0, 1}
     assert preds.index[0].year == first_test_year(noise)
 
@@ -120,7 +120,7 @@ def test_accuracy_table_on_a_tiny_example():
     assert table.loc["model", "accuracy"] == pytest.approx(0.50)
     assert table.loc["Always up", "accuracy"] == pytest.approx(0.75)
     assert table.loc["model", "predicted up"] == pytest.approx(0.75)
-    assert not table.loc["Always up", "beats always-up?"]
+    assert not table.loc["Always up", "beats always up?"]
 
 
 # ---------------------------- backtest ------------------------------------
@@ -155,7 +155,7 @@ def test_luck_check_spots_a_perfect_strategy(noise):
     test = noise[noise.index.year >= 2010]
     perfect = (test["next_ret"] > 0).astype(int)
     result = luck_check(perfect, test["next_ret"], n_trials=200)
-    assert result["share of random >="] == 0
+    assert result["share of random >="] == pytest.approx(1 / 201)   # never exactly 0
     assert result["cash days"] == (perfect == 0).sum()
 
 
@@ -174,14 +174,14 @@ def _check(data):
 def test_pipeline_finds_the_planted_pattern(pattern):
     table = _check(pattern)
     assert table.loc["Logistic regression", "accuracy"] > 0.56
-    assert table.loc["Logistic regression", "beats always-up?"]
+    assert table.loc["Logistic regression", "beats always up?"]
 
 
 def test_pipeline_finds_nothing_in_noise(noise):
     table = _check(noise)
     model = table.loc["Logistic regression", "accuracy"]
     always_up = table.loc["Always up", "accuracy"]
-    assert not table.loc["Logistic regression", "beats always-up?"]
+    assert not table.loc["Logistic regression", "beats always up?"]
     assert abs(model - always_up) < 0.04
 
 
@@ -351,10 +351,10 @@ def test_luck_check_by_week_reshuffles_whole_weeks(calm_and_wild, monkeypatch):
     random_positions = []
     real_backtest = evaluate.backtest
 
-    def recording_backtest(position, next_ret, cost=0.001):
+    def recording_backtest(position, next_ret, cost=0.001, cash_ret=None):
         if cost == 0:
             random_positions.append(position)
-        return real_backtest(position, next_ret, cost)
+        return real_backtest(position, next_ret, cost, cash_ret)
 
     monkeypatch.setattr(evaluate, "backtest", recording_backtest)
     result = luck_check(weekly, test["next_ret"], n_trials=20, metric="Sharpe ratio", by_week=True)
@@ -373,7 +373,7 @@ def test_luck_check_by_week_spots_perfect_weeks(noise):
     week_return = test["next_ret"].groupby(blocks).transform("sum")
     perfect = pd.Series(np.where(week_return < 0, 0.5, 1.0), index=test.index)
     result = luck_check(perfect, test["next_ret"], n_trials=200, by_week=True)
-    assert result["share of random >="] == 0
+    assert result["share of random >="] == pytest.approx(1 / 201)
 
 
 def test_recent_swing_finds_clusters_but_not_constant_volatility(calm_and_wild, constant_vol):
@@ -384,7 +384,7 @@ def test_recent_swing_finds_clusters_but_not_constant_volatility(calm_and_wild, 
     the day's move, so the rule is much weaker than on real prices (about 53%
     here vs. about 60% on SPY). That's fine: this checks it uses the right days.
     """
-
+    
     for data, works in [(calm_and_wild, True), (constant_vol, False)]:
         test = data[data.index.year >= first_test_year(data)]
         acc = (vol_baseline_predictions(test)["Recent swing"] == test["target"]).mean()
@@ -392,3 +392,87 @@ def test_recent_swing_finds_clusters_but_not_constant_volatility(calm_and_wild, 
             assert acc > 0.52
         else:
             assert abs(acc - 0.5) < 0.02
+
+
+
+# ---------------------------- phase 4.2 ------------------------------------
+
+def test_walk_forward_leaves_out_the_day_whose_label_is_in_the_test_year(noise):
+    """The last training day's label is the first test day's move, so it must not be trained on."""
+
+    RecordingModel.seen = []
+    walk_forward(RecordingModel(), noise, first_year=2010)
+    for (_, last_training_day), year in zip(RecordingModel.seen, range(2010, 2100)):
+        before = noise.index[noise.index.year < year]
+        assert last_training_day == before[-2]          # the second-to-last day before the year
+
+
+def test_last_day_only_counts_as_a_week_end_on_a_friday():
+    wednesday_end = pd.bdate_range("2020-03-02", "2020-03-11")    # ends on a Wednesday
+    held = hold_for_week(pd.Series(np.arange(len(wednesday_end)), index=wednesday_end))
+    assert held.iloc[-1] == held[pd.Timestamp("2020-03-06")]     # still last Friday's decision
+    friday_end = pd.bdate_range("2020-03-02", "2020-03-13")
+    held = hold_for_week(pd.Series(np.arange(len(friday_end)), index=friday_end))
+    assert held.iloc[-1] == len(friday_end) - 1                 # a Friday decides
+
+
+def test_accuracy_table_refuses_missing_predictions():
+    days = pd.bdate_range("2020-01-01", periods=4)
+    target = pd.Series([1, 0, 1, 1], index=days)
+    with pytest.raises(ValueError, match="no prediction for 2"):
+        accuracy_table({"model": pd.Series([1, 0], index=days[:2])}, target)
+
+
+def test_paired_test_against_always_up_counts_only_down_predictions():
+    """Against "always up", the only days that differ are those the model says "down"."""
+
+    days = pd.bdate_range("2020-01-01", periods=8)
+    target = pd.Series([1, 0, 0, 1, 0, 1, 1, 0], index=days)
+    model = pd.Series([1, 0, 0, 0, 0, 1, 1, 1], index=days)     # says down on 4 days, right on 3
+    table = accuracy_table({"model": model}, target)
+    assert paired_counts(model, pd.Series(1, index=days), target) == (3, 1)
+    assert table.loc["model", "p-value vs always up"] == pytest.approx(5 / 16)   # P(3+ of 4 by coin)
+
+
+def test_edge_range_by_hand():
+    """30 wins, 10 losses in 100 days: edge 0.2, spread sqrt(0.4 - 0.04) = 0.6, range 1.96 * 0.06."""
+
+    assert edge_half_width(30, 10, 100) == pytest.approx(1.96 * 0.06)
+    assert edge_half_width(0, 0, 100) == 0
+
+
+def test_backtest_with_interest_on_cash_by_hand():
+    days = pd.bdate_range("2020-01-01", periods=3)
+    next_ret = pd.Series([0.01, 0.01, 0.01], index=days)
+    cash = pd.Series(0.0002, index=days)
+    daily = backtest(pd.Series([1, 0.5, 0], index=days), next_ret, cost=0, cash_ret=cash)
+    np.testing.assert_allclose(daily.values, [0.01, 0.005 + 0.0001, 0.0002])
+
+
+def test_sharpe_uses_returns_above_cash():
+    rng = np.random.default_rng(1)
+    days = pd.bdate_range("2015-01-01", periods=500)
+    returns = pd.Series(rng.normal(0.0005, 0.01, 500), index=days)
+    cash = pd.Series(0.0002, index=days)
+    plain, with_cash = performance(returns), performance(returns, cash)
+    expected = (returns - 0.0002).mean() / returns.std() * np.sqrt(252)
+    assert with_cash["Sharpe ratio"] == pytest.approx(expected)
+    assert with_cash["Sharpe ratio"] < plain["Sharpe ratio"]
+    assert with_cash["annual return"] == plain["annual return"]   # only the Sharpe ratio changes
+
+
+def test_random_luck_versions_earn_the_same_interest(noise, monkeypatch):
+    """A fair luck check gives random versions the same interest on cash as the strategy."""
+
+    test = noise[noise.index.year >= 2010]
+    cash = pd.Series(0.0002, index=test.index)
+    seen = []
+    real_backtest = evaluate.backtest
+
+    def recording_backtest(position, next_ret, cost=0.001, cash_ret=None):
+        seen.append(cash_ret)
+        return real_backtest(position, next_ret, cost, cash_ret)
+
+    monkeypatch.setattr(evaluate, "backtest", recording_backtest)
+    luck_check((test["ret_1d"] > 0).astype(int), test["next_ret"], n_trials=5, cash_ret=cash)
+    assert len(seen) == 6 and all(c is cash for c in seen)

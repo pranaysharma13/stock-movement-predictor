@@ -17,8 +17,8 @@ from src.evaluate import get_models, walk_forward
 from src.features import build_dataset
 from src.evaluate import paired_p_value, vol_baseline_predictions
 from src.features import VOL_FEATURES, build_vol_dataset
-from src.report import (comparison_table, half_on_big, load_summaries, safe_name, save_summary,
-                        summarize, summarize_vol)
+from src.report import (comparison_table, half_on_big, holm, load_summaries, safe_name,
+                        save_summary, summarize, summarize_vol)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +40,7 @@ def _summary(ticker, p_values, luck_shares):
         "buy and hold": {"annual return": 0.10, "Sharpe ratio": 0.6, "max drawdown": -0.3},
         "models": {
             f"model {i}": {"accuracy": 0.54, "predicted up": 0.9, "p-value vs always up": p,
+                           "wins vs always up": 100, "losses vs always up": 72,
                            "annual return": 0.09, "Sharpe ratio": 0.5, "max drawdown": -0.3,
                            "cash days": 100, "share of random >=": luck}
             for i, (p, luck) in enumerate(zip(p_values, luck_shares))
@@ -147,6 +148,14 @@ def test_run_rejects_negative_cost():
         run.parse_args(["SPY", "--cost", "-0.1"])
 
 
+def test_run_passes_the_interest_setting(monkeypatch):
+    seen = []
+    monkeypatch.setattr(run, "run_notebook", lambda template, output, parameters: seen.append(parameters))
+    run.main(["SPY", "--no-comparison"])
+    run.main(["SPY", "--no-comparison", "--no-interest"])
+    assert [p["CASH_INTEREST"] for p in seen] == [True, False]
+
+
 def test_run_keeps_going_when_one_stock_fails(monkeypatch, capsys):
     """A bad ticker is reported, the others still run, and the exit code says something failed."""
 
@@ -169,7 +178,7 @@ def test_run_keeps_going_when_one_stock_fails(monkeypatch, capsys):
 # ---------------------------- templates ------------------------------------
 
 @pytest.mark.parametrize("name, names", [
-    ("template.ipynb", ["TICKER", "START", "FIRST_TEST_YEAR", "COST"]),
+    ("template.ipynb", ["TICKER", "START", "FIRST_TEST_YEAR", "COST", "CASH_INTEREST"]),
     ("comparison_template.ipynb", ["TICKERS"]),
 ])
 def test_template_has_a_parameters_cell(name, names):
@@ -202,6 +211,8 @@ def _vol_block(p_values, luck_shares, weekly_luck_shares=None):
         "models": {
             f"model {i}": {"accuracy": 0.60, "predicted big": 0.4,
                            "p-value vs recent swing": p, "p-value vs same as today": 0.0001,
+                           "wins vs recent swing": 300, "losses vs recent swing": 272,
+                           "wins vs same as today": 500, "losses vs same as today": 306,
                            "strategy": strat, "strategy (weekly)": strat,
                            "share of random >=": luck, "share of random >= (weekly)": wluck}
             for i, (p, luck, wluck) in enumerate(zip(p_values, luck_shares, weekly_luck_shares))
@@ -254,12 +265,14 @@ def test_volatility_comparison_is_corrected_on_its_own():
     # luck: daily and weekly for each model = 4 comparisons, bar 0.05 / 4
     assert info["luck comparisons"] == 4
     assert info["luck corrected threshold"] == pytest.approx(0.0125)
+    # Holm over the four luck shares 0.001, 0.011, 0.02, 0.9: bars 0.0125, 0.0167, 0.025, 0.05.
+    # The first three pass; Bonferroni (0.0125 for all) would have passed only the first.
     assert table.loc[("A", "model 0"), "beats luck, daily (corrected)?"]      # 0.001
-    assert table.loc[("A", "model 0"), "beats luck, weekly (5%)?"]            # 0.02
-    assert not table.loc[("A", "model 0"), "beats luck, weekly (corrected)?"]
     assert table.loc[("A", "model 1"), "beats luck, weekly (corrected)?"]     # 0.011
+    assert table.loc[("A", "model 0"), "beats luck, weekly (corrected)?"]     # 0.02
+    assert not table.loc[("A", "model 1"), "beats luck, daily (corrected)?"]  # 0.9
     assert info["luck passes (5%)"] == 3
-    assert info["luck passes (corrected)"] == 2
+    assert info["luck passes (corrected)"] == 3
 
 
 def test_direction_comparison_counts_one_luck_test_per_row():
@@ -285,3 +298,121 @@ def test_old_summaries_without_move_size_say_what_to_do():
 def test_unknown_task_is_refused():
     with pytest.raises(ValueError, match="task must be"):
         comparison_table([_summary("A", [0.5], [0.5])], task="price")
+
+
+
+# ---------------------------- phase 4.2 ------------------------------------
+
+def test_holm_by_hand():
+    # Bonferroni's bar for 4 tests is 0.0125: only 0.01 passes. Holm's bars are
+    # 0.0125, 0.0167, 0.025, 0.05 in turn: 0.01 and 0.015 pass, 0.2 stops it.
+    assert list(holm([0.2, 0.015, 0.3, 0.01])) == [False, True, False, True]
+    # missing values count as tests and never pass
+    assert list(holm([float("nan"), 0.001])) == [False, True]
+
+
+def test_holm_stops_at_the_first_miss():
+    # sorted 0.03, 0.04: the first bar is 0.025, so nothing passes
+    assert list(holm([0.04, 0.03], alpha=0.05)) == [False, False]
+
+
+def test_summary_p_value_is_the_paired_test_against_always_up():
+    data = build_dataset(make_random_walk(n_days=1800, seed=6))
+    test = data[data.index.year >= 2010]
+    pred = (test["ret_1d"] > 0).astype(int)
+    s = summarize("X", test, {"m": pd.DataFrame({"pred": pred}, index=test.index)}, luck_trials=10)
+    expected = paired_p_value(pred, pd.Series(1, index=test.index), test["target"])
+    assert s["models"]["m"]["p-value vs always up"] == pytest.approx(expected)
+
+
+def test_summary_paired_counts_match_the_accuracies(noise_summary):
+    for m in noise_summary["models"].values():
+        n = noise_summary["test days"]
+        assert (m["wins vs always up"] - m["losses vs always up"]) / n == pytest.approx(
+            m["accuracy"] - noise_summary["always up accuracy"])
+
+
+def test_summary_uses_interest_on_cash():
+    data = build_dataset(make_random_walk(n_days=1800, seed=6))
+    test = data[data.index.year >= 2010]
+    preds = {"Half the time": pd.DataFrame({"pred": (test["ret_1d"] > 0).astype(int)}, index=test.index)}
+    plain = summarize("X", test, preds, luck_trials=10)
+    with_cash = summarize("X", test.assign(cash_ret=0.0002), preds, luck_trials=10)
+    assert with_cash["average cash interest"] == pytest.approx(0.0002 * 252)
+    assert with_cash["models"]["Half the time"]["annual return"] > plain["models"]["Half the time"]["annual return"]
+    assert with_cash["buy and hold"]["Sharpe ratio"] < plain["buy and hold"]["Sharpe ratio"]
+
+
+def test_comparison_ranges_come_from_the_paired_counts():
+    table, _ = comparison_table([_summary("A", [0.5], [0.5])])
+    from src.evaluate import edge_half_width
+    assert table.loc[("A", "model 0"), "edge ±"] == pytest.approx(edge_half_width(100, 72, 2770))
+
+
+def test_summaries_from_before_phase_4_2_say_what_to_do():
+    s = _summary("OLD", [0.5], [0.5])
+    del s["models"]["model 0"]["wins vs always up"]
+    with pytest.raises(ValueError, match="python run.py OLD"):
+        comparison_table([s])
+
+
+def _fake_papermill(monkeypatch, fail):
+    """A stand-in for papermill that writes its output file, then fails if asked."""
+    import sys
+    import types
+
+    def execute_notebook(template, output, **kwargs):
+        Path(output).write_text("partly run" if fail else "new report")
+        if fail:
+            raise RuntimeError("cell 12 failed\nKeyError: 'Close'")
+
+    fake = types.ModuleType("papermill")
+    fake.execute_notebook = execute_notebook
+    monkeypatch.setitem(sys.modules, "papermill", fake)
+
+
+def test_a_failed_run_keeps_the_last_good_report(tmp_path, monkeypatch):
+    output = tmp_path / "SPY.ipynb"
+    output.write_text("last good report")
+    _fake_papermill(monkeypatch, fail=True)
+    with pytest.raises(RuntimeError):
+        run.run_notebook(Path("template.ipynb"), output, {})
+    assert output.read_text() == "last good report"
+    assert run.partial_path(output).read_text() == "partly run"
+
+
+def test_a_successful_run_replaces_the_report(tmp_path, monkeypatch):
+    output = tmp_path / "SPY.ipynb"
+    output.write_text("old report")
+    _fake_papermill(monkeypatch, fail=False)
+    run.run_notebook(Path("template.ipynb"), output, {})
+    assert output.read_text() == "new report"
+    assert not run.partial_path(output).exists()
+
+
+def test_a_comparison_error_without_a_message_is_reported(monkeypatch, capsys):
+    def fake_run_notebook(template, output, parameters):
+        if "TICKERS" in parameters:
+            raise RuntimeError("")
+
+    monkeypatch.setattr(run, "run_notebook", fake_run_notebook)
+    assert run.main(["SPY", "NVDA"]) == 1
+    assert "Comparison: FAILED - RuntimeError" in capsys.readouterr().out
+
+
+def test_comparison_only_uses_saved_summaries(tmp_path, monkeypatch, capsys, noise_summary):
+    import src.report as report_module
+    monkeypatch.setattr(report_module, "SUMMARY_DIR", tmp_path)
+    save_summary({**noise_summary, "ticker": "SPY"}, folder=tmp_path)
+    ran = []
+    monkeypatch.setattr(run, "run_notebook", lambda template, output, parameters: ran.append(parameters))
+    code = run.main(["SPY", "NVDA", "--comparison-only"])
+    assert ran == [{"TICKERS": ["SPY"]}]                 # no stock re-run; NVDA has no summary
+    assert code == 1
+    assert "NVDA: no saved summary" in capsys.readouterr().out
+
+
+def test_template_tests_both_parts_over_the_same_years():
+    source = "\n".join(c.source for c in nbformat.read(ROOT / "notebooks" / "template.ipynb", as_version=4).cells)
+    assert "vol_first_year = FIRST_TEST_YEAR" in source
+    assert "first_test_year(vol_data)" not in source

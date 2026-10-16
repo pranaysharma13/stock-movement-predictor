@@ -37,10 +37,33 @@ FEATURES = [
 ]
 
 
+def require_volume(prices):
+    """Stop with a clear message if the prices have no trading volume.
+
+    Indexes such as ^VIX and currency pairs such as EURUSD=X report a volume
+    of 0 every day, so volume_ratio would be 0 / 0 on every row and every row
+    would be dropped.
+    """
+
+    if (prices["Volume"].fillna(0) <= 0).all():
+        raise ValueError(
+            "These prices have no trading volume (common for indexes such as ^VIX and "
+            "currency pairs such as EURUSD=X), and the volume_ratio feature needs it. "
+            "Try a fund that trades, for example SPY instead of ^GSPC."
+        )
+
+
+def _require_rows(data, warm_up):
+    if data.empty:
+        raise ValueError(f"No usable rows: the features need about {warm_up} trading days "
+                         "of history before the first usable day.")
+    return data
+
 
 def make_features(prices):
     """One row per day, one column per feature (see ALL_FEATURES)."""
 
+    require_volume(prices)
     close = prices["Close"]
     volume = prices["Volume"]
     daily_ret = close / close.shift(1) - 1
@@ -81,7 +104,7 @@ def build_dataset(prices):
     data = make_features(prices)
     close = prices["Close"]
     data["next_ret"] = close.shift(-1) / close - 1
-    data = data.dropna()
+    data = _require_rows(data.dropna(), 50)
     data["target"] = (data["next_ret"] > 0).astype(int)
     return data
 
@@ -111,6 +134,7 @@ def make_vol_features(prices):
                     over the same days, else 0 (the "Recent swing" baseline)
     """
 
+    require_volume(prices)
     close = prices["Close"]
     daily_ret = close / close.shift(1) - 1
     typical = daily_ret.abs().rolling(TYPICAL_WINDOW).median()
@@ -143,7 +167,7 @@ def build_vol_dataset(prices):
     data = make_vol_features(prices)
     close = prices["Close"]
     data["next_ret"] = close.shift(-1) / close - 1
-    data = data.dropna()
+    data = _require_rows(data.dropna(), TYPICAL_WINDOW)
     data["wide_range"] = data["wide_range"].astype(int)
     data["target"] = (data["next_ret"].abs() > data["typical_move"]).astype(int)
     return data

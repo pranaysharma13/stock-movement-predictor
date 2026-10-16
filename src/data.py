@@ -6,8 +6,14 @@ library) the first time it runs, and saves a CSV copy in the data/ folder.
 Later runs load that CSV instead, so your results stay the same until you
 choose to refresh.
 
-drop_unfinished_day() removes today's row when the data was downloaded while
-the US market was still open, because that "close" is not final yet.
+drop_unfinished_day() removes today's row when the data was downloaded before
+6 pm New York time, because that day's prices may not be final yet.
+
+repair_prices() fixes rows where High and Low don't contain Open and Close,
+which occasionally happens in Yahoo's data.
+
+load_cash_returns() gives the daily interest earned on cash (13-week US
+Treasury bills), used by the backtests for money that is out of the market.
 
 Fake prices, used as checks on the whole pipeline:
 - make_random_walk(): no pattern at all, and every day equally wild. A correct
@@ -24,6 +30,8 @@ from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -32,8 +40,20 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 PRICE_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 NEW_YORK = ZoneInfo("America/New_York")
-# The US market closes at 4:00 pm New York time; allow 30 minutes for final prices.
-MARKET_SETTLED = time(16, 30)
+# The US market closes at 4:00 pm New York time. Yahoo can still be adjusting
+# the day's prices half an hour later, so a day only counts as final from 6 pm.
+MARKET_SETTLED = time(18, 0)
+
+# The 13-week US Treasury bill yield, in percent a year: the standard
+# "risk-free" rate for money held in cash.
+CASH_TICKER = "^IRX"
+TRADING_DAYS = 252
+
+
+def safe_name(ticker):
+    """A ticker as a file name: letters, digits, dot, dash and underscore only ("^GSPC" -> "_GSPC")."""
+
+    return re.sub(r"[^A-Za-z0-9._-]", "_", ticker)
 
 
 def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
@@ -44,16 +64,17 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
     refresh: True re-downloads (for example to pick up the latest days)
 
     Returns a DataFrame indexed by date with Open, High, Low, Close, Volume.
+    prices.attrs["repaired days"] lists the days repair_prices() had to fix.
     """
 
     DATA_DIR.mkdir(exist_ok=True)
-    cache = DATA_DIR / f"{ticker}_from_{start}.csv"
+    cache = DATA_DIR / f"{safe_name(ticker)}_from_{start}.csv"
 
     if cache.exists() and not refresh:
         prices = pd.read_csv(cache, index_col="Date", parse_dates=True)
         # The file's save time tells us whether its last day was still in progress.
         saved_at = datetime.fromtimestamp(cache.stat().st_mtime, tz=timezone.utc)
-        return drop_unfinished_day(prices, saved_at)
+        return repair_prices(drop_unfinished_day(prices, saved_at))
 
     # Imported here so the rest of the project still works without yfinance.
     import yfinance as yf
@@ -74,12 +95,12 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
     prices = raw[PRICE_COLUMNS].dropna()
     prices.index = pd.to_datetime(prices.index)
     if prices.index.tz is not None:
-        prices.index = prices.index.tz_localize(None).normalize()           # keep the local trading date
+        prices.index = prices.index.tz_localize(None).normalize()  # keep the local trading date
     prices.index.name = "Date"
 
     prices = drop_unfinished_day(prices, datetime.now(timezone.utc))
     prices.to_csv(cache)
-    return prices
+    return repair_prices(prices)
 
 
 def drop_unfinished_day(prices, downloaded_at):
@@ -89,8 +110,8 @@ def drop_unfinished_day(prices, downloaded_at):
     downloaded_at: when the data was fetched (a timezone-aware datetime)
 
     If the last row is dated today (in New York) and the data was fetched
-    before 4:30 pm New York time, its "close" is just the price at that
-    moment, so the row is dropped.
+    before 6 pm New York time, its prices may still change, so the row is
+    dropped.
     """
 
     if prices.empty:
@@ -101,6 +122,42 @@ def drop_unfinished_day(prices, downloaded_at):
         return prices.iloc[:-1]
     return prices
 
+
+def repair_prices(prices):
+    """Make every row's High and Low contain its Open and Close.
+
+    Yahoo occasionally has rows where, say, Open is above High. High is set
+    to the largest of the four prices and Low to the smallest; Close, which
+    every return is built from, is never changed. The repaired days are
+    listed in prices.attrs["repaired days"].
+    """
+
+    prices = prices.copy()
+    ohlc = prices[["Open", "High", "Low", "Close"]]
+    bad = (ohlc.max(axis=1) > prices["High"]) | (ohlc.min(axis=1) < prices["Low"])
+    prices["High"] = ohlc.max(axis=1)
+    prices["Low"] = ohlc.min(axis=1)
+    prices.attrs["repaired days"] = [str(d.date()) for d in prices.index[bad]]
+    return prices
+
+
+def load_cash_returns(index, start="2005-01-01", refresh=False):
+    """Interest earned by money held in cash, per trading day, for the days in index.
+
+    Uses the 13-week US Treasury bill yield (^IRX on Yahoo Finance), quoted in
+    percent a year, spread evenly over 252 trading days. The rate known at
+    today's close is the one earned until tomorrow's close. Days before the
+    first quote use the first quote.
+    """
+
+    rates = load_prices(CASH_TICKER, start, refresh)["Close"] / 100 / TRADING_DAYS
+    return cash_returns_on(rates, index)
+
+
+def cash_returns_on(daily_rates, index):
+    """daily_rates lined up with index: the latest rate known on each day."""
+    combined = daily_rates.reindex(daily_rates.index.union(index)).ffill().bfill()
+    return combined.reindex(index).rename("cash_ret")
 
 
 # ---------------------------- fake prices ------------------------------------

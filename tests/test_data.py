@@ -15,8 +15,9 @@ import pandas as pd
 import pytest
 
 import src.data as data_module
-from src.data import (NEW_YORK, PRICE_COLUMNS, drop_unfinished_day, load_prices,
-                      make_planted_pattern, make_random_walk, make_volatility_clusters)
+from src.data import (NEW_YORK, PRICE_COLUMNS, TRADING_DAYS, cash_returns_on, drop_unfinished_day,
+                      load_cash_returns, load_prices, make_planted_pattern, make_random_walk,
+                      make_volatility_clusters, repair_prices)
 
 
 def _prices_ending(last_day, n=5):
@@ -28,7 +29,6 @@ def _new_york(when):
     return datetime.fromisoformat(when).replace(tzinfo=NEW_YORK)
 
 
-
 # ---------------------------- unfinished day ------------------------------------
 
 def test_drops_today_when_downloaded_during_trading_hours():
@@ -38,10 +38,17 @@ def test_drops_today_when_downloaded_during_trading_hours():
     assert len(result) == len(prices) - 1
 
 
-@pytest.mark.parametrize("when", ["2026-10-09 17:00", "2026-10-10 09:00"])
+@pytest.mark.parametrize("when", ["2026-10-09 18:30", "2026-10-10 09:00"])
 def test_keeps_today_once_the_market_has_closed(when):
     prices = _prices_ending("2026-10-09")
     assert drop_unfinished_day(prices, _new_york(when)).index[-1] == pd.Timestamp("2026-10-09")
+
+
+def test_drops_today_shortly_after_the_close():
+    """At 4:36 pm Yahoo can still be adjusting the day (a review found Open above High then)."""
+
+    prices = _prices_ending("2026-10-09")
+    assert drop_unfinished_day(prices, _new_york("2026-10-09 16:36")).index[-1] == pd.Timestamp("2026-10-08")
 
 
 def test_keeps_yesterdays_close_during_today_trading():
@@ -151,3 +158,62 @@ def test_volatility_clusters_keep_direction_random():
     up = make_volatility_clusters(n_days=5500)["Close"].pct_change().dropna() > 0
     assert up.mean() == pytest.approx(0.5, abs=0.03)
     assert (up != up.shift(1)).iloc[1:].mean() == pytest.approx(0.5, abs=0.03)
+
+
+# ---------------------------- phase 4.2: repairs, file names, cash ------------------------------------
+
+def test_repair_prices_makes_high_and_low_contain_open_and_close():
+    days = pd.bdate_range("2026-10-05", periods=3, name="Date")
+    prices = pd.DataFrame({"Open": [10.0, 773.24, 10.0], "High": [11.0, 773.23, 11.0],
+                           "Low": [9.0, 770.0, 9.5], "Close": [10.5, 772.0, 9.4],
+                           "Volume": [1.0, 1.0, 1.0]}, index=days)
+    fixed = repair_prices(prices)
+    assert fixed.loc[days[1], "High"] == 773.24          # Open was above High
+    assert fixed.loc[days[2], "Low"] == 9.4              # Close was below Low
+    assert fixed["Close"].equals(prices["Close"])        # returns are never touched
+    assert fixed.attrs["repaired days"] == ["2026-10-06", "2026-10-07"]
+    assert repair_prices(fixed).attrs["repaired days"] == []
+
+
+def _fake_yfinance(monkeypatch, frame):
+    raw = frame.copy()
+    fake_yf = types.ModuleType("yfinance")
+    fake_yf.download = lambda *args, **kwargs: raw
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+
+def test_tickers_with_symbols_get_safe_file_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(data_module, "DATA_DIR", tmp_path)
+    _fake_yfinance(monkeypatch, make_random_walk(n_days=20, start="2010-01-04"))
+    load_prices("^GSPC", "2010-01-01", refresh=True)
+    assert (tmp_path / "_GSPC_from_2010-01-01.csv").exists()
+    assert len(load_prices("^GSPC", "2010-01-01")) == 20    # and the saved copy is found again
+
+
+def test_cash_returns_carry_the_latest_rate_forward():
+    rates = pd.Series([0.0002, 0.0001], index=pd.to_datetime(["2020-01-03", "2020-01-08"]))
+    days = pd.to_datetime(["2020-01-02", "2020-01-06", "2020-01-07", "2020-01-08", "2020-01-09"])
+    cash = cash_returns_on(rates, days)
+    # before the first quote: the first quote; then the latest known rate
+    assert list(cash) == [0.0002, 0.0002, 0.0002, 0.0001, 0.0001]
+
+
+def test_load_cash_returns_turns_a_yearly_percent_into_a_daily_rate(tmp_path, monkeypatch):
+    monkeypatch.setattr(data_module, "DATA_DIR", tmp_path)
+    days = pd.bdate_range("2010-01-04", periods=10, name="Date")
+    quotes = pd.DataFrame({c: 5.04 for c in ["Open", "High", "Low", "Close"]}, index=days)
+    quotes["Volume"] = 0.0
+    _fake_yfinance(monkeypatch, quotes)
+    cash = load_cash_returns(days, "2010-01-01", refresh=True)
+    assert cash.iloc[0] == pytest.approx(0.0504 / TRADING_DAYS)
+    assert (tmp_path / "_IRX_from_2010-01-01.csv").exists()
+
+
+def test_saved_file_is_repaired_when_loaded(tmp_path, monkeypatch):
+    monkeypatch.setattr(data_module, "DATA_DIR", tmp_path)
+    prices = _prices_ending("2013-01-25")
+    prices.loc[pd.Timestamp("2013-01-22"), "Open"] = 99.0       # above that day's High
+    prices.to_csv(tmp_path / "SPY_from_2005-01-01.csv")
+    loaded = load_prices("SPY", "2005-01-01")
+    assert loaded.attrs["repaired days"] == ["2013-01-22"]
+    assert loaded.loc["2013-01-22", "High"] == 99.0

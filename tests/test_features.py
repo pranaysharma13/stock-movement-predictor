@@ -65,7 +65,7 @@ def test_dataset_has_no_gaps_and_no_last_day(prices):
 
 def test_feature_values_on_a_simple_series():
     """On prices rising exactly 1% a day, the features have known values."""
-
+    
     days = pd.bdate_range("2020-01-01", periods=80, name="Date")
     close = 100 * 1.01 ** np.arange(80)
     prices = pd.DataFrame(
@@ -87,7 +87,7 @@ def test_feature_lists_match_what_is_calculated(prices):
     assert len(FEATURES) == 5
 
 
-# ---------------------------- Part 2: move size ------------------------------------
+# ---------------------------- part 2: move size ------------------------------------
 
 @pytest.fixture
 def long_prices():
@@ -164,4 +164,20 @@ def test_wide_range_is_the_recent_swing_rule(long_prices):
     assert feats["wide_range"].iloc[: TYPICAL_WINDOW - 1].isna().all()   # not enough history yet
     data = build_vol_dataset(long_prices)
     assert set(data["wide_range"].unique()) <= {0, 1}
-    assert "wide_range" not in VOL_FEATURES                             # a baseline, not a model feature
+    assert "wide_range" not in VOL_FEATURES       # a baseline, not a model feature
+
+
+# ---------------------------- phase 4.2 ------------------------------------
+
+def test_prices_without_volume_get_a_clear_error(long_prices):
+    """Indexes like ^VIX report zero volume every day; both tasks should say so plainly."""
+    
+    no_volume = long_prices.assign(Volume=0.0)
+    for build in (build_dataset, build_vol_dataset):
+        with pytest.raises(ValueError, match="no trading volume"):
+            build(no_volume)
+
+
+def test_too_little_history_gets_a_clear_error(long_prices):
+    with pytest.raises(ValueError, match="No usable rows"):
+        build_vol_dataset(long_prices.iloc[:200])

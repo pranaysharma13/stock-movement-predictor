@@ -11,40 +11,47 @@ comparison_table()   one row per stock and model, plus the lucky-winners check
 The lucky-winners problem: test enough stocks and models, and a few will
 "win" by chance alone. At the usual 5% level, about 1 comparison in 20 passes
 even when nothing real is going on. So the comparison also applies a stricter
-bar (the Bonferroni correction): divide 5% by the number of comparisons.
-The two tasks answer different questions, so each is corrected on its own.
+bar, the Holm correction (see holm()). The two tasks answer different
+questions, so each is corrected on its own.
 
-Part 2's main bar is the "Recent swing" rule, and accuracy is compared with
-a paired test (paired_p_value), because the rule predicts the same days.
+Accuracy is always compared with a baseline using the paired test
+(paired_p_value): "always up" in Part 1, the "Recent swing" rule in Part 2.
 """
 
 
 import json
-import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import binomtest
 
-from .evaluate import backtest, hold_for_week, luck_check, paired_p_value, performance
 
+from .data import safe_name  # noqa: F401  (kept here too: reports are named with it)
+from .evaluate import (backtest, edge_half_width, hold_for_week, luck_check, paired_counts,
+                       paired_p_value, performance)
 
 ROOT = Path(__file__).resolve().parent.parent
 SUMMARY_DIR = ROOT / "reports" / "summaries"
 
 
-def safe_name(ticker):
-    """A ticker as a file name: letters, digits, dot, dash and underscore only."""
+def _cash_of(test):
+    """The test rows' interest on cash, if the dataset carries it (column cash_ret)."""
 
-    return re.sub(r"[^A-Za-z0-9._-]", "_", ticker)
+    return test["cash_ret"] if "cash_ret" in test else None
+
+
+def _paired(pred, baseline_pred, target, name):
+    wins, losses = paired_counts(pred, baseline_pred, target)
+    return {f"p-value vs {name}": paired_p_value(pred, baseline_pred, target),
+            f"wins vs {name}": wins, f"losses vs {name}": losses}
 
 
 def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000):
     """Headline numbers for one stock.
 
     ticker:      the stock's symbol
-    test:        the test-period rows of the dataset (needs target and next_ret)
+    test:        the test-period rows of the dataset (needs target and
+                 next_ret; cash_ret too if cash earns interest)
     model_preds: {model name: DataFrame with a "pred" column}, from walk_forward()
     cost:        trading cost per buy or sell, as in the backtest
     luck:        {model name: luck_check() result}, if already calculated;
@@ -53,9 +60,10 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
     Returns a plain dict, ready to save as JSON.
     """
 
-    target, next_ret = test["target"], test["next_ret"]
+    target, next_ret, cash = test["target"], test["next_ret"], _cash_of(test)
     always_up = float(target.mean())
-    hold = performance(backtest(pd.Series(1, index=test.index), next_ret, cost))
+    ones = pd.Series(1, index=test.index)
+    hold = performance(backtest(ones, next_ret, cost, cash), cash)
     luck = dict(luck or {})
 
     models = {}
@@ -63,19 +71,19 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
         pred = p["pred"].reindex(test.index)
         correct = pred == target
         n, k = len(correct), int(correct.sum())
-        perf = performance(backtest(pred, next_ret, cost))
+        perf = performance(backtest(pred, next_ret, cost, cash), cash)
         cash_days = int((pred == 0).sum())
         if cash_days == 0:
             luck_share = None          # never in cash: nothing to compare with random cash days
         else:
             if name not in luck:
-                luck[name] = luck_check(pred, next_ret, cost=cost, n_trials=luck_trials)
+                luck[name] = luck_check(pred, next_ret, cost=cost, n_trials=luck_trials, cash_ret=cash)
             luck_share = float(luck[name]["share of random >="])
         models[name] = {
             "accuracy": k / n,
             "predicted up": float(pred.mean()),
-            # Chance of an accuracy this high if the model were no better than "always up"
-            "p-value vs always up": float(binomtest(k, n, always_up, alternative="greater").pvalue),
+            # Paired test: only days where the model says "down" can differ from "always up"
+            **_paired(pred, ones, target, "always up"),
             "annual return": float(perf["annual return"]),
             "Sharpe ratio": float(perf["Sharpe ratio"]),
             "max drawdown": float(perf["max drawdown"]),
@@ -89,6 +97,7 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
         "test end": str(test.index[-1].date()),
         "test days": int(len(test)),
         "cost": cost,
+        "average cash interest": float(cash.mean() * 252) if cash is not None else 0.0,
         "always up accuracy": always_up,
         "buy and hold": {
             "annual return": float(hold["annual return"]),
@@ -120,11 +129,11 @@ def summarize_vol(test, model_preds, baselines, cost=0.001, luck=None, luck_tria
     weekly, on Sharpe ratio against random half-position days or weeks.
     """
 
-    target, next_ret = test["target"], test["next_ret"]
+    target, next_ret, cash = test["target"], test["next_ret"], _cash_of(test)
     luck = dict(luck or {})
 
     def strategy(position):
-        perf = performance(backtest(position, next_ret, cost))
+        perf = performance(backtest(position, next_ret, cost, cash), cash)
         return {k: float(perf[k]) for k in ("annual return", "Sharpe ratio", "max drawdown")}
 
     def both_strategies(pred):
@@ -137,23 +146,23 @@ def summarize_vol(test, model_preds, baselines, cost=0.001, luck=None, luck_tria
         daily, weekly = half_on_big(pred), half_on_big(hold_for_week(pred))
         if name not in luck:
             luck[name] = luck_check(daily, next_ret, cost=cost, n_trials=luck_trials,
-                                    metric="Sharpe ratio")
+                                    metric="Sharpe ratio", cash_ret=cash)
         if f"{name}, weekly" not in luck:
             luck[f"{name}, weekly"] = luck_check(weekly, next_ret, cost=cost, n_trials=luck_trials,
-                                                 metric="Sharpe ratio", by_week=True)
+                                                 metric="Sharpe ratio", by_week=True, cash_ret=cash)
         models[name] = {
             "accuracy": float((pred == target).mean()),
             "predicted big": float(pred.mean()),
             # Paired tests: the chance of winning this many of the days where
             # the model and the rule disagree, if the model were no better
-            "p-value vs recent swing": paired_p_value(pred, baselines["Recent swing"], target),
-            "p-value vs same as today": paired_p_value(pred, baselines["Same as today"], target),
+            **_paired(pred, baselines["Recent swing"], target, "recent swing"),
+            **_paired(pred, baselines["Same as today"], target, "same as today"),
             **both_strategies(pred),
             "share of random >=": float(luck[name]["share of random >="]),
             "share of random >= (weekly)": float(luck[f"{name}, weekly"]["share of random >="]),
         }
 
-    hold = performance(backtest(pd.Series(1, index=test.index), next_ret, cost))
+    hold = performance(backtest(pd.Series(1, index=test.index), next_ret, cost, cash), cash)
     return {
         "test start": str(test.index[0].date()),
         "test end": str(test.index[-1].date()),
@@ -194,13 +203,20 @@ def _direction_rows(summaries):
     rows = []
     for s in summaries:
         for model, m in s["models"].items():
+            if "wins vs always up" not in m:
+                raise ValueError(
+                    f"The summary for {s['ticker']} was made before phase 4.2 (it has no paired "
+                    f"counts). Run `python run.py {s['ticker']}` again."
+                )
             luck = m["share of random >="]
+            n = s["test days"]
             rows.append({
                 "stock": s["ticker"],
                 "model": model,
                 "accuracy": m["accuracy"],
                 "always up": s["always up accuracy"],
                 "edge": m["accuracy"] - s["always up accuracy"],
+                "edge ±": edge_half_width(m["wins vs always up"], m["losses vs always up"], n),
                 "p-value vs always up": m["p-value vs always up"],
                 "annual return": m["annual return"],
                 "buy and hold": s["buy and hold"]["annual return"],
@@ -213,11 +229,13 @@ def _volatility_rows(summaries):
     rows = []
     for s in summaries:
         v = s.get("volatility")
-        if v is None or "recent swing accuracy" not in v:
+        if (v is None or "recent swing accuracy" not in v
+                or any("wins vs recent swing" not in m for m in v["models"].values())):
             raise ValueError(
                 f"The summary for {s['ticker']} has no move-size results, or was made "
-                f"before the Recent swing baseline was added. Run `python run.py {s['ticker']}` again."
+                f"before phase 4.2. Run `python run.py {s['ticker']}` again."
             )
+        n = v["test days"]
         for model, m in v["models"].items():
             rows.append({
                 "stock": s["ticker"],
@@ -226,8 +244,11 @@ def _volatility_rows(summaries):
                 "recent swing": v["recent swing accuracy"],
                 "same as today": v["same as today accuracy"],
                 "edge": m["accuracy"] - v["recent swing accuracy"],
+                "edge ±": edge_half_width(m["wins vs recent swing"], m["losses vs recent swing"], n),
                 "p-value vs recent swing": m["p-value vs recent swing"],
                 "edge over same as today": m["accuracy"] - v["same as today accuracy"],
+                "edge over same as today ±": edge_half_width(m["wins vs same as today"],
+                                                             m["losses vs same as today"], n),
                 "p-value vs same as today": m["p-value vs same as today"],
                 "Sharpe (daily)": m["strategy"]["Sharpe ratio"],
                 "Sharpe (weekly)": m["strategy (weekly)"]["Sharpe ratio"],
@@ -241,6 +262,29 @@ def _volatility_rows(summaries):
                                               ", weekly": "share of random >= (weekly)"}
 
 
+def holm(values, alpha=0.05):
+    """Which results pass after the Holm correction for testing many things.
+
+    values: p-values (or luck shares); missing values count as tests that fail.
+
+    Sort the m values from smallest to largest. The smallest must be at most
+    alpha / m (the Bonferroni bar), the next at most alpha / (m - 1), and so
+    on; the first one that misses its bar stops the process, and it and every
+    larger value fail. Holm keeps the same guarantee as Bonferroni (the chance
+    of even one lucky pass stays at most alpha) and never passes fewer results.
+    """
+
+    values = np.asarray(values, dtype=float)
+    m = len(values)
+    passed = np.zeros(m, dtype=bool)
+    order = np.argsort(np.where(np.isnan(values), np.inf, values), kind="stable")
+    for rank, i in enumerate(order):
+        if np.isnan(values[i]) or values[i] > alpha / (m - rank):
+            break
+        passed[i] = True
+    return passed
+
+
 def comparison_table(summaries, alpha=0.05, task="direction"):
     """One row per stock and model, with plain and corrected pass/fail columns.
 
@@ -251,17 +295,18 @@ def comparison_table(summaries, alpha=0.05, task="direction"):
           own correction.
 
     Returns (table, info):
-      table: accuracy vs the task's baseline, backtest results, and yes/no
-             columns: does it pass at alpha, and at the corrected bar?
+      table: accuracy vs the task's baseline, with "edge ±", the 95% range of
+             the edge from the paired counts; backtest results; and yes/no
+             columns: does it pass at alpha, and after the Holm correction?
              The volatility task has luck columns for both the daily and the
              weekly strategy ("beats luck, daily (5%)?" and so on).
-      info:  number of comparisons, the corrected thresholds, how many
+      info:  number of comparisons, the strictest corrected bar (alpha / number
+             of comparisons, what the smallest value must clear), how many
              passes you would expect by luck alone at alpha, and pass counts
 
-    Corrected bar = alpha / number of comparisons of that kind. Each luck
-    column is one comparison per row, so two luck columns double the count.
-    For the volatility task, "beats same as today (corrected)?" is shown for
-    context with the accuracy correction.
+    Each luck column is one comparison per row, so the volatility task's two
+    luck columns form one family of twice the number of rows. For the
+    volatility task, "beats same as today (corrected)?" is shown for context.
     """
 
     if task == "direction":
@@ -272,33 +317,34 @@ def comparison_table(summaries, alpha=0.05, task="direction"):
         raise ValueError(f"task must be 'direction' or 'volatility', not {task!r}")
     table = pd.DataFrame(rows).set_index(["stock", "model"])
     n = len(table)
-    corrected = alpha / n if n else alpha
     n_luck = n * len(luck_columns)
-    luck_corrected = alpha / n_luck if n_luck else alpha
 
     p = table[p_column]
-    table["accuracy edge (5%)?"] = p < alpha
-    table["accuracy edge (corrected)?"] = p < corrected
+    table["accuracy edge (5%)?"] = p <= alpha
+    table["accuracy edge (corrected)?"] = holm(p, alpha)
     if task == "volatility":
-        table["beats same as today (corrected)?"] = table["p-value vs same as today"] < corrected
-    luck_flags = []
-    for suffix, column in luck_columns.items():
+        table["beats same as today (corrected)?"] = holm(table["p-value vs same as today"], alpha)
+    # The luck columns are corrected together, as one family
+    luck_values = np.concatenate([table[c].to_numpy(dtype=float) for c in luck_columns.values()])
+    luck_passed = holm(luck_values, alpha)
+    for k, (suffix, column) in enumerate(luck_columns.items()):
         table[f"beats luck{suffix} (5%)?"] = table[column] <= alpha
-        table[f"beats luck{suffix} (corrected)?"] = table[column] <= luck_corrected
-        luck_flags.append(suffix)
+        table[f"beats luck{suffix} (corrected)?"] = luck_passed[k * n:(k + 1) * n]
 
+    flags = [f"beats luck{x}" for x in luck_columns]
     info = {
+        "method": "Holm",
         "comparisons": n,
         "alpha": alpha,
-        "corrected threshold": corrected,
+        "corrected threshold": alpha / n if n else alpha,
         "expected chance passes": n * alpha,
         "accuracy passes (5%)": int(table["accuracy edge (5%)?"].sum()),
         "accuracy passes (corrected)": int(table["accuracy edge (corrected)?"].sum()),
         "luck comparisons": n_luck,
-        "luck corrected threshold": luck_corrected,
+        "luck corrected threshold": alpha / n_luck if n_luck else alpha,
         "expected chance luck passes": n_luck * alpha,
-        "luck passes (5%)": int(sum(table[f"beats luck{x} (5%)?"].sum() for x in luck_flags)),
-        "luck passes (corrected)": int(sum(table[f"beats luck{x} (corrected)?"].sum() for x in luck_flags)),
+        "luck passes (5%)": int(sum(table[f"{f} (5%)?"].sum() for f in flags)),
+        "luck passes (corrected)": int(sum(table[f"{f} (corrected)?"].sum() for f in flags)),
     }
     if task == "volatility":
         info["same as today passes (corrected)"] = int(table["beats same as today (corrected)?"].sum())

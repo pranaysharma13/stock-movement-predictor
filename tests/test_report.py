@@ -15,7 +15,7 @@ import run
 from src.data import make_random_walk
 from src.evaluate import get_models, walk_forward
 from src.features import build_dataset
-from src.evaluate import vol_baseline_predictions
+from src.evaluate import paired_p_value, vol_baseline_predictions
 from src.features import VOL_FEATURES, build_vol_dataset
 from src.report import (comparison_table, half_on_big, load_summaries, safe_name, save_summary,
                         summarize, summarize_vol)
@@ -58,7 +58,7 @@ def test_summary_has_the_headline_numbers(noise_summary):
         assert 0 <= m["accuracy"] <= 1
         assert 0 <= m["p-value vs always up"] <= 1
         assert m["share of random >="] is None or 0 <= m["share of random >="] <= 1
-    json.dumps(s)                       # must be saveable as JSON
+    json.dumps(s)  # must be saveable as JSON
 
 
 def test_summary_accuracy_matches_a_direct_count():
@@ -189,17 +189,22 @@ def test_templates_are_saved_without_outputs():
 
 # ---------------------------- Part 2: move size ------------------------------------
 
-def _vol_block(p_values, luck_shares):
+def _vol_block(p_values, luck_shares, weekly_luck_shares=None):
+    weekly_luck_shares = weekly_luck_shares or [0.5] * len(p_values)
+    strat = {"annual return": 0.08, "Sharpe ratio": 0.7, "max drawdown": -0.2}
     return {
         "test start": "2010-01-04", "test end": "2020-12-31", "test days": 2770,
         "share of big days": 0.5, "majority accuracy": 0.51, "same as today accuracy": 0.53,
+        "recent swing accuracy": 0.59,
         "buy and hold": {"annual return": 0.10, "Sharpe ratio": 0.8, "max drawdown": -0.3},
         "same as today strategy": {"annual return": 0.05, "Sharpe ratio": 0.4, "max drawdown": -0.25},
+        "recent swing strategy": {"strategy": strat, "strategy (weekly)": strat},
         "models": {
-            f"model {i}": {"accuracy": 0.60, "predicted big": 0.4, "p-value vs same as today": p,
-                           "strategy": {"annual return": 0.08, "Sharpe ratio": 0.7, "max drawdown": -0.2},
-                           "share of random >=": luck}
-            for i, (p, luck) in enumerate(zip(p_values, luck_shares))
+            f"model {i}": {"accuracy": 0.60, "predicted big": 0.4,
+                           "p-value vs recent swing": p, "p-value vs same as today": 0.0001,
+                           "strategy": strat, "strategy (weekly)": strat,
+                           "share of random >=": luck, "share of random >= (weekly)": wluck}
+            for i, (p, luck, wluck) in enumerate(zip(p_values, luck_shares, weekly_luck_shares))
         },
     }
 
@@ -208,13 +213,25 @@ def test_vol_summary_has_the_headline_numbers():
     data = build_vol_dataset(make_random_walk(n_days=2200, seed=8))
     test = data[data.index.year >= 2010]
     preds = {name: walk_forward(m, data, 2010, features=VOL_FEATURES) for name, m in get_models().items()}
-    v = summarize_vol(test, preds, vol_baseline_predictions(test), luck_trials=20)
+    baselines = vol_baseline_predictions(test)
+    v = summarize_vol(test, preds, baselines, luck_trials=20)
+    # each p-value is the paired test against the rule it names
+    for name, m in v["models"].items():
+        for rule in ["Recent swing", "Same as today"]:
+            expected = paired_p_value(preds[name]["pred"], baselines[rule], test["target"])
+            assert m[f"p-value vs {rule.lower()}"] == pytest.approx(expected)
+    assert v["recent swing accuracy"] == pytest.approx((baselines["Recent swing"] == test["target"]).mean())
     assert set(v["models"]) == {"Logistic regression", "Gradient boosting"}
     assert 0 <= v["same as today accuracy"] <= 1
+    assert 0 <= v["recent swing accuracy"] <= 1
     assert v["majority accuracy"] >= 0.5
+    assert set(v["recent swing strategy"]) == {"strategy", "strategy (weekly)"}
     for m in v["models"].values():
-        assert set(m["strategy"]) == {"annual return", "Sharpe ratio", "max drawdown"}
-        assert 0 <= m["p-value vs same as today"] <= 1
+        for key in ["strategy", "strategy (weekly)"]:
+            assert set(m[key]) == {"annual return", "Sharpe ratio", "max drawdown"}
+        for key in ["p-value vs recent swing", "p-value vs same as today",
+                    "share of random >=", "share of random >= (weekly)"]:
+            assert 0 <= m[key] <= 1
     json.dumps(v)
 
 
@@ -224,14 +241,40 @@ def test_half_on_big():
 
 def test_volatility_comparison_is_corrected_on_its_own():
     s = _summary("A", [0.5, 0.5], [0.5, 0.5])
-    s["volatility"] = _vol_block([0.001, 0.02], [0.001, 0.9])
+    s["volatility"] = _vol_block([0.001, 0.02], [0.001, 0.9], [0.02, 0.011])
     table, info = comparison_table([s], task="volatility")
+    # accuracy: 2 comparisons (one per model) against Recent swing
     assert info["comparisons"] == 2
     assert info["corrected threshold"] == pytest.approx(0.025)
     assert table.loc[("A", "model 0"), "accuracy edge (corrected)?"]
     assert table.loc[("A", "model 1"), "accuracy edge (corrected)?"]      # 0.02 < 0.025
-    assert table.loc[("A", "model 0"), "edge"] == pytest.approx(0.60 - 0.53)
-    assert info["luck passes (corrected)"] == 1
+    assert table.loc[("A", "model 0"), "edge"] == pytest.approx(0.60 - 0.59)
+    assert table.loc[("A", "model 0"), "edge over same as today"] == pytest.approx(0.60 - 0.53)
+    assert info["same as today passes (corrected)"] == 2
+    # luck: daily and weekly for each model = 4 comparisons, bar 0.05 / 4
+    assert info["luck comparisons"] == 4
+    assert info["luck corrected threshold"] == pytest.approx(0.0125)
+    assert table.loc[("A", "model 0"), "beats luck, daily (corrected)?"]      # 0.001
+    assert table.loc[("A", "model 0"), "beats luck, weekly (5%)?"]            # 0.02
+    assert not table.loc[("A", "model 0"), "beats luck, weekly (corrected)?"]
+    assert table.loc[("A", "model 1"), "beats luck, weekly (corrected)?"]     # 0.011
+    assert info["luck passes (5%)"] == 3
+    assert info["luck passes (corrected)"] == 2
+
+
+def test_direction_comparison_counts_one_luck_test_per_row():
+    table, info = comparison_table([_summary("A", [0.5, 0.5], [0.02, 0.5])])
+    assert info["luck comparisons"] == 2
+    assert info["luck corrected threshold"] == pytest.approx(0.025)
+    assert table.loc[("A", "model 0"), "beats luck (corrected)?"]
+
+
+def test_summaries_from_before_recent_swing_say_what_to_do():
+    s = _summary("OLD", [0.5], [0.5])
+    s["volatility"] = _vol_block([0.5], [0.5])
+    del s["volatility"]["recent swing accuracy"]
+    with pytest.raises(ValueError, match="python run.py OLD"):
+        comparison_table([s], task="volatility")
 
 
 def test_old_summaries_without_move_size_say_what_to_do():

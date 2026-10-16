@@ -5,18 +5,19 @@ Can a machine learning model predict tomorrow's stock move, better than simple r
 The project asks two questions about tomorrow, never the exact price:
 
 1. **Direction:** will the stock close higher? Judged against "always predict up."
-2. **Move size:** will the move, up or down, be bigger than usual? Judged against "same as today" (if today was a big day, predict tomorrow will be too).
+2. **Move size:** will the move, up or down, be bigger than usual? Judged against "Recent swing", a one-line rule: predict a big day if today's high-to-low swing was wider than usual for the past year.
 
 Both are tested honestly:
 
 - **Walk-forward testing:** every prediction comes from a model trained only on earlier years.
-- **Real baselines:** models must beat "always predict up," not just a coin flip.
+- **Real baselines:** models must beat "always predict up," not just a coin flip; for move size, they must beat the strongest simple rule we found.
+- **Paired test against rules:** a model and a rule predict the same days, so only the days they disagree count.
 - **Noise check:** every accuracy comes with a 95% range.
 - **Backtest with trading costs,** compared against buy-and-hold.
 - **Luck check:** any backtest edge is compared with sitting out the same number of random days.
 - **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
 - **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar, because some will "win" by chance alone.
-- **Does it help?** Move-size predictions are turned into a strategy that halves the position on predicted big days, judged on risk (Sharpe ratio, worst drop) after trading costs.
+- **Does it help?** Move-size predictions are turned into a strategy that halves the position on predicted big days, deciding daily or once a week, judged on risk (Sharpe ratio, worst drop) after trading costs.
 
 For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
 
@@ -115,12 +116,12 @@ It takes a few seconds and needs no internet: every test runs on small fake pric
 
 | Test file | What it checks |
 |---|---|
-| `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" uses only the past year; known values on simple price series |
+| `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series |
 | `test_data.py` | Today's unfinished row is dropped; saved files and the download path work (with a fake yfinance); fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
-| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest arithmetic matches hand calculations, including half positions; the luck check works on returns and on Sharpe ratio; both pipeline checks pass for both tasks |
-| `test_report.py` | Summaries for both tasks are correct and saveable; the lucky-winners correction counts properly and is applied to each task separately; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
+| `test_evaluate.py` | Walk-forward never trains on the year it predicts; default calls work; backtest arithmetic matches hand calculations, including half positions; the paired test matches a hand calculation; weekly positions only change at week ends (holiday weeks included); the luck check works on returns, on Sharpe ratio and on whole weeks; both pipeline checks pass for both tasks |
+| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value against the rule it names; the lucky-winners correction counts properly, is applied to each task separately, and counts daily and weekly strategies; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
-The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats): each one makes at least one test fail.
+The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day): each one makes at least one test fail.
 
 ## Features
 
@@ -150,10 +151,12 @@ A day is **big** when its move, up or down, is larger than the stock's typical m
 | `range_rel` | How far the price swung within today, from low to high |
 | `volume_ratio` | Today's volume vs. its 20-day average |
 
+The baselines need no model: "same as today" (big tomorrow if today's move was bigger than usual) and "Recent swing" (big tomorrow if today's high-to-low swing was wider than its median over the past 250 days). Recent swing is the bar.
+
 ## Limitations
 
 - The backtest assumes trades happen exactly at the closing price.
 - Costs are a flat percentage; real costs vary.
 - Daily data only.
-- The half-on-big strategy switches between full and half positions often, so its result depends heavily on the assumed trading cost.
+- The daily half-on-big strategy switches between full and half positions often, so its result depends heavily on the assumed trading cost; the weekly version trades about a quarter as often.
 - NVDA, AAPL and GOOGL were chosen knowing they became huge winners, so their buy-and-hold results look good partly in hindsight. Each report says so.

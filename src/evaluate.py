@@ -7,9 +7,11 @@ walk_forward()         train only on the past, predict the next year, step forwa
 baseline_predictions() simple rules a direction model has to beat
 vol_baseline_predictions()  simple rules a move-size model has to beat
 accuracy_table()       accuracy with a 95% range, so you can tell an edge from noise
+paired_p_value()       is one set of predictions really better than another on the same days?
 accuracy_by_year()     how stable is the accuracy from year to year?
 backtest_table()       turn predictions into a trading rule and compare with buy-and-hold
-luck_check()           could the backtest result come from picking random days?
+hold_for_week()        decide once a week instead of every day
+luck_check()           could the backtest result come from picking random days (or weeks)?
 
 Everything here works for both tasks: "target" is whatever the dataset
 predicts (an up day, or a big day).
@@ -124,7 +126,8 @@ def baseline_predictions(data, seed=0):
 def vol_baseline_predictions(data):
     """Simple rules for the move-size task, as 0/1 predictions (1 = big day).
 
-    data needs abs_ret_rel (today's move relative to the typical move).
+    data needs abs_ret_rel (today's move relative to the typical move) and
+    wide_range (from make_vol_features).
     """
 
     return pd.DataFrame(
@@ -133,9 +136,12 @@ def vol_baseline_predictions(data):
             # is the bar a model must clear just to be better than guessing.
             "Always small": 0,
             "Always big": 1,
-            # Volatility clustering in one line: if today was big, tomorrow
-            # will be too. This is the real bar for the move-size task.
+            # Volatility clustering in one line: if today was big, tomorrow will be too.
             "Same as today": (data["abs_ret_rel"] > 1).astype(int),
+            # A sharper one-line rule: if today's high-to-low swing was wider
+            # than usual for the past year, predict a big day. No model, no
+            # fitting. This is the real bar for the move-size task.
+            "Recent swing": data["wide_range"].astype(int),
         },
         index=data.index,
     )
@@ -161,13 +167,18 @@ def accuracy_table(predictions, target, baseline=None):
       p-value vs coin flip     chance of scoring this well by flipping coins
       beats always-up?         True only if even the low end of the range
                                is above the "always up" accuracy
-                               (named "beats <baseline>?" when one is given)
+
+    With a named baseline, two columns replace "beats always-up?":
+      p-value vs <baseline>    from paired_p_value(): the baseline is itself
+                               a prediction on the same days, so only the
+                               days where the two disagree count
+      beats <baseline>?        True if that p-value is below 0.05
     """
 
     if baseline is None:
         bar, bar_column = target.mean(), "beats always-up?"
     else:
-        bar = (pd.Series(predictions[baseline]).reindex(target.index) == target).mean()
+        base_pred = pd.Series(predictions[baseline]).reindex(target.index)
         bar_column = f"beats {baseline.lower()}?"
     rows = {}
     for name, pred in predictions.items():
@@ -176,25 +187,86 @@ def accuracy_table(predictions, target, baseline=None):
         n, k = len(correct), int(correct.sum())
         acc = k / n
         half_width = 1.96 * np.sqrt(acc * (1 - acc) / n)
-        rows[name] = {
+        row = {
             "accuracy": acc,
             "range low": acc - half_width,
             "range high": acc + half_width,
             "predicted up": pred.mean(),
             "p-value vs coin flip": binomtest(k, n, 0.5, alternative="greater").pvalue,
-            bar_column: bool(acc - half_width > bar),
         }
+        if baseline is None:
+            row[bar_column] = bool(acc - half_width > bar)
+        else:
+            p = paired_p_value(pred, base_pred, target)
+            row[f"p-value vs {baseline.lower()}"] = p
+            row[bar_column] = bool(p < 0.05)
+        rows[name] = row
     return pd.DataFrame(rows).T
+
+
+def paired_p_value(pred, baseline_pred, target):
+    """Is pred really more accurate than baseline_pred on the same days?
+
+    Days where both are right, or both wrong, say nothing about which is
+    better. Only the days where they disagree count: if the two were equally
+    good, each would win about half of those. Returns the chance of pred
+    winning at least as many of them as it did if they were equally good
+    (a one-sided sign test, also called McNemar's exact test). 1.0 if they
+    never disagree.
+
+    This is stricter and fairer than comparing pred's accuracy with a fixed
+    number, because a strong baseline agrees with the model on most days.
+    """
+
+    pred_right = pd.Series(pred).reindex(target.index) == target
+    base_right = pd.Series(baseline_pred).reindex(target.index) == target
+    wins = int((pred_right & ~base_right).sum())
+    losses = int((~pred_right & base_right).sum())
+    if wins + losses == 0:
+        return 1.0
+    return float(binomtest(wins, wins + losses, 0.5, alternative="greater").pvalue)
 
 
 def accuracy_by_year(predictions, target):
     """Accuracy of each method in each calendar year."""
+    
     hits = pd.DataFrame(
         {name: pd.Series(p).reindex(target.index) == target
          for name, p in predictions.items()}
     )
     return hits.groupby(hits.index.year).mean()
 
+
+# ---------------------------- weekly decisions ------------------------------------
+
+def _week_ends(index):
+    """True on the last trading day of each calendar week (usually Friday)."""
+
+    days = index.to_series()
+    week = index.to_period("W")
+    return (days.groupby(week).transform("max") == days).to_numpy()
+
+
+def hold_for_week(signal):
+    """Decide once a week instead of every day.
+
+    The value on the last trading day of each week (usually Friday's close) is
+    kept until the next week's last day. Days before the first week end keep
+    the first day's value. Trading weekly means far fewer trades, so lower
+    costs, at the price of reacting more slowly.
+    """
+
+    signal = pd.Series(signal)
+    decided = signal.where(_week_ends(signal.index))
+    decided.iloc[0] = signal.iloc[0]
+    return decided.ffill().astype(signal.dtype)
+
+
+def week_blocks(index):
+    """A label per day for the week a weekly decision is held: each block runs
+    from one week's last trading day to the day before the next one."""
+
+    return pd.Series(np.cumsum(_week_ends(index)), index=index)
 
 
 # ---------------------------- backtest ------------------------------------
@@ -256,7 +328,7 @@ def backtest_table(positions, next_ret, cost=0.001):
 
 
 def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0,
-               metric="annual return"):
+               metric="annual return", by_week=False):
     """Could a strategy's result come from picking random days?
 
     Keeps the same number of days below a full position as the strategy (cash
@@ -269,6 +341,10 @@ def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0,
     metric: which number from performance() to compare, e.g. "annual return"
             (direction) or "Sharpe ratio" (move size, where the aim is less
             risk per unit of return rather than more return).
+    by_week: for a strategy that decides once a week (hold_for_week()).
+            The random versions then reshuffle whole weeks rather than single
+            days, so they are reduced for the same number of weeks, like for
+            like. The position must be constant within each week block.
 
     Returns:
       <metric>:            the strategy's own value
@@ -284,10 +360,22 @@ def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0,
     reduced_values = position[reduced].to_numpy()
     actual = performance(backtest(position, next_ret, cost))[metric]
     rng = np.random.default_rng(seed)
+    if by_week:
+        blocks = week_blocks(next_ret.index)
+        if (position.groupby(blocks).nunique() > 1).any():
+            raise ValueError("by_week=True needs a position that only changes at week ends "
+                             "(use hold_for_week()).")
+        block_values = position.groupby(blocks).first()
+        day_block = blocks.to_numpy()
     random_values = []
     for _ in range(n_trials):
-        random_pos = pd.Series(1.0, index=next_ret.index)
-        random_pos.iloc[rng.choice(len(next_ret), n_cash, replace=False)] = reduced_values
+        if by_week:
+            shuffled = rng.permutation(block_values.to_numpy())
+            random_pos = pd.Series(shuffled[np.searchsorted(block_values.index, day_block)],
+                                   index=next_ret.index)
+        else:
+            random_pos = pd.Series(1.0, index=next_ret.index)
+            random_pos.iloc[rng.choice(len(next_ret), n_cash, replace=False)] = reduced_values
         random_values.append(performance(backtest(random_pos, next_ret, cost=0))[metric])
     random_values = np.array(random_values)
     return {

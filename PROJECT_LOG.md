@@ -1,14 +1,14 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 15 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
+*Last updated: 16 October 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
 
 ## Overview
 
-No model predicts tomorrow's direction better than "always predict up" on any of four stocks: past prices hold no usable signal for direction. Move size is different: on all four stocks, both models predict big vs. small days better than the rule "same as today", by 3 to 8 percentage points, and all 8 results survive the correction for testing many things.
+No model predicts tomorrow's direction better than "always predict up" on any of four stocks: past prices hold no usable signal for direction. Move size is different: on all four stocks, both models predict big vs. small days better than the rule "same as today", by 3 to 8 percentage points, and all 8 results survive the correction for testing many things. But on SPY, a one-line rule with no model, "Recent swing" (a big day is likely if today's high-to-low swing was wider than usual), matches the models exactly: move size is predictable, and one line captures it.
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; two tasks (direction, and big vs. small moves) with 5 price-based features each; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–4 are built: fixes, 67 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 adds a second task, big vs. small moves, to every report. Next: phase 5 (LSTM).
+- **Status:** phases 1–4.1 are built: fixes, 77 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Next: re-run the four stocks, then phase 5 (LSTM).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -36,13 +36,15 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Lucky-winners correction | In the comparison, a result must pass at 5% divided by the number of comparisons (Bonferroni); 4 stocks × 2 models = 8, so 0.63% | With 8 comparisons at 5%, about 0.4 pass by luck alone |
 | Hindsight note | Every report says how much $1 grew and warns that well-known winners look good partly in hindsight | NVDA, AAPL and GOOGL were picked knowing how they turned out |
 | Pipeline checks | The same code on random-walk prices (should find nothing) and on prices with a planted 60% reversal pattern (should find it) | Proves the code neither invents a pattern nor misses a real one |
-| Automated tests | 46 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
+| Automated tests | 77 `pytest` tests on small fake price series; no internet needed; run locally, not on GitHub | Catch look-ahead, label, walk-forward, arithmetic, comparison and `run.py` bugs within seconds |
 | Move-size label (Part 2) | Big = tomorrow's move, up or down, larger than the median daily move over the previous 250 trading days | A fixed bar like 1% means something different for a calm fund and a wild stock; the past-year median adapts to each stock and era and gives about half big days |
 | Move-size features | Today's move size, 5- and 20-day volatility, today's high-low range, volume ratio; all relative to the typical move | All measure recent move size, on the same scale as the label |
-| Move-size baselines | Always small / always big, and "same as today" (big tomorrow if today was big) | "Same as today" is volatility clustering in one line, so it is the real bar |
+| Move-size baselines | Always small / always big; "same as today" (big tomorrow if today's move was bigger than usual); and, since phase 4.1, "Recent swing" (big tomorrow if today's high-to-low swing was wider than its median over the past 250 days) | "Same as today" turned out to be an easy bar. Recent swing is still one line with no fitting, but uses a better measure of how wild today was, so it is the real bar |
+| Comparing a model with a rule | Paired test (McNemar's exact test): only the days where model and rule disagree count; "beats <rule>?" means p below 0.05 | A rule predicts the same days and agrees with the model on most of them; treating the rule's accuracy as a fixed number overstates how sure we can be |
+| Weekly strategy | Next to the daily half-on-big strategy, a weekly one: decide on the last trading day of each week, hold for the next week; its luck check reshuffles whole weeks | Far fewer trades, so much lower costs; random weeks make the luck check like for like |
 | Move-size strategy | Full position on predicted calm days, half on predicted big days; judged on Sharpe ratio and worst drop; luck check on Sharpe ratio | Volatility targeting aims at less risk per unit of return, not more return |
 | Move-size pipeline checks | Constant-volatility prices (should find nothing) and GARCH clustered-volatility prices with index-like settings 0.10 / 0.88 (should find it) | Proves the move-size pipeline neither invents nor misses clustering |
-| Correction across stocks | Applied to each task separately: 8 direction and 8 move-size comparisons | The two tasks answer different questions |
+| Correction across stocks | Applied to each task separately: 8 direction and 8 move-size accuracy comparisons; the move-size luck check counts 16 (daily and weekly strategy for each), so its corrected bar is 5% / 16 | The two tasks answer different questions; every extra strategy tested is another chance for a lucky pass |
 | Where it runs | Locally (Mac) | Claude's workspace can't reach Yahoo Finance, so the code was tested on fake prices and the saved SPY CSV |
 
 ## How to read the outputs
@@ -98,16 +100,46 @@ The two tables that matter most are the accuracy table (section 4) and the backt
 | --- | --- | --- |
 | Typical move chart | The bar a "big" day is measured against, over time | It rises in turbulent years (2008, 2020, 2022) and falls in calm ones |
 | Feature correlation | How each move-size feature relates to a big day tomorrow | Clearly positive, unlike Part 1 |
-| Accuracy table | Each method's accuracy, with "beats same as today?" | The honest test: the model's whole 95% range above "same as today" |
-| Accuracy by year | Models and "same as today" year by year | An edge in every year, not just a few |
-| Pipeline checks | Constant volatility (about 50%) and clustered volatility (beats "same as today") | Both should behave as described |
-| Half-on-big backtest | Sharpe ratio, worst drop and trades, with free trading and with costs | Lower risk only counts if Sharpe holds up after costs |
+| Accuracy table | Each method's accuracy, with paired p-values against "same as today" and "Recent swing", and "beats recent swing?" | The honest test: a p-value against Recent swing below 0.05 |
+| Disagreement table | For each model: on how many days it disagrees with Recent swing, and who was right on those days | Only these days decide which is better; a near-even split means the model adds nothing |
+| Accuracy by year | Models and both rules year by year | An edge in every year, not just a few |
+| Pipeline checks | Constant volatility (about 50%) and clustered volatility (models beat both rules) | Both should behave as described; the rule is weak on fake prices, whose intraday swings are mostly noise |
+| Half-on-big backtest | Sharpe ratio, worst drop and trades for each model and rule, daily and weekly, with free trading and with costs | Lower risk only counts if Sharpe holds up after costs; compare daily with weekly to see what trading less does |
 | Return per unit of risk | Average return divided by daily swing, on predicted big vs. calm days | If similar, halving big days cuts reward as much as risk |
-| Luck check | How often random half-position days reach the same Sharpe ratio | About 0.05 or less is hard to explain by luck |
+| Luck check | How often random half-position days (daily) or random whole weeks (weekly) reach the same Sharpe ratio | About 0.05 or less is hard to explain by luck |
+
+In the comparison, Part 2 now shows two edge charts (against "same as today", then against Recent swing), a table with both strategies, and a luck count that includes the weekly strategies.
 
 ## Results so far
 
-Move size is predictable on all four stocks; direction is not. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+
+### After phase 4.1: SPY against the Recent swing rule
+
+Run on the saved SPY CSV on 16 October 2026; same test period as phase 4 (4 January 2010 to 7 October 2026, 4,216 days). The four-stock results still need a re-run on my Mac (`python run.py SPY NVDA AAPL GOOGL`).
+
+| Method | Accuracy | 95% range | Paired p-value vs Recent swing | Paired p-value vs Same as today |
+| --- | --- | --- | --- | --- |
+| Recent swing (one-line rule) | 61.65% | 60.2–63.1% | — | below 0.0001 |
+| Logistic regression | 61.62% | 60.2–63.1% | 0.53 | below 0.0001 |
+| Gradient boosting | 61.12% | 59.7–62.6% | 0.78 | below 0.0001 |
+| Same as today | 53.3% | 51.8–54.9% | — | — |
+
+- **A one-line rule matches the models.** Logistic regression and the rule agree on 78% of days. On the 933 days they disagree, the model is right on 466 and the rule on 467. Year by year, the model is ahead in 7 of 17 years and behind in 10.
+- **What this means:** move size is predictable, but the predictability comes from one well-chosen measure, today's high-to-low swing compared with its usual size. The five features and the models add nothing on SPY. Phase 4's "beats same as today" was true but measured against a weak bar.
+- **Comparing the swing with its own usual size works better than dividing it by the typical close-to-close move:** 61.7% vs 60.3% for the same idea built on `range_rel` (the version tested before building).
+- **Pipeline checks:** on constant-volatility prices every method lands at 49–51%. On clustered-volatility prices, logistic regression (58.2%) and gradient boosting (57.1%) beat both rules (Recent swing 55.3%, same as today 54.3%). On fake prices the intraday swing is mostly random noise, so the rule is weaker there than on real prices.
+
+| Strategy, half on predicted big days (0.1% cost per trade) | Sharpe, daily | Sharpe, weekly | Worst drop, weekly | Trades, daily → weekly | Luck share, daily → weekly |
+| --- | --- | --- | --- | --- | --- |
+| Buy and hold | 0.86 | — | -33.7% | 1 | — |
+| Logistic regression | 0.72 | 0.85 | -23.3% | 789 → 219 | 0.96 → 0.39 |
+| Gradient boosting | 0.61 | 0.90 | -18.6% | 1,060 → 262 | 1.00 → 0.18 |
+| Recent swing | 0.54 | 0.78 | -19.7% | 1,317 → 315 | — |
+| Same as today | 0.34 | 0.81 | -18.6% | 1,964 → 408 | — |
+
+- **Deciding weekly changes the strategy result more than the choice of model.** Trades fall by about three quarters and Sharpe rises by 0.13 to 0.47. Gradient boosting's weekly version edges past buy-and-hold (0.90 vs 0.86) with a much smaller worst drop (-19% vs -34%).
+- **But it isn't evidence yet:** random whole weeks, trading free, reach that Sharpe 18% of the time, and 39% for logistic regression. Weekly is clearly the better way to use the prediction, but not a proven edge.
 
 ### After phase 4: move size on four stocks
 
@@ -237,10 +269,13 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Nineteen issues so far: sixteen fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Newest first.
+Twenty-two issues so far: nineteen fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 22 | In the constant-volatility pipeline check, "Recent swing" showed True in "beats same as today?" (50.8% vs 49.4%): one rule beating another by chance, in a check that should find nothing | 16 Oct 2026 | Fixed | The "beats" columns in the pipeline checks are about the models, so they are now left empty for the rules |
+| 21 | On the fake prices, the Recent swing rule only reaches about 53%, against about 62% on SPY | 16 Oct 2026 | Workaround | The fake prices' intraday swing is mostly random noise around the day's move, unlike real prices. The pipeline checks are about the models, which behave as expected; the rule's own test only checks that it works on clustered volatility and finds nothing on constant volatility |
+| 20 | "Same as today" was an easy bar, and the move-size p-value compared the model's accuracy with the rule's as if the rule's were a fixed number | 15 Oct 2026 | Fixed | Phase 4.1: a one-feature check showed today's swing alone gets most of the way; added the Recent swing baseline and a paired test that only counts days where model and rule disagree |
 | 19 | NVDA and GOOGL showed the identical "always up" accuracy, 0.5284495021337127, which could have meant one stock's data was a copy of the other's | 12 Oct 2026 | Not a bug | Checked day by day: both have exactly 2,229 up days out of 4,218, but move the same way on only 66.3% of days. A coincidence; the data is correct |
 | 18 | `.gitignore` had no line break at its end, so `echo` glued the new entry onto the last line (`.DS_Storenotebooks/analysis.ipynb`); neither rule worked and VS Code kept offering to add `analysis.ipynb` back | 12 Oct 2026 | Fixed | Split into two lines; checked with `git check-ignore -v`. VS Code's "Insert Final Newline" setting makes every file end with a line break |
 | 17 | The comparison chart's legend covered the GOOGL gradient-boosting point | 12 Oct 2026 | Fixed | Legend moved below the chart; found by rendering the chart and looking at it |
@@ -299,6 +334,12 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **The simpler model keeps winning.** Logistic regression beat gradient boosting on every stock, in both tasks. A more flexible model only helps if the extra patterns it finds carry over to later years; here they didn't.
 
+**Always try the simplest strong rule.** "Same as today" was a fair-sounding bar, and beating it by 8 points looked like a big win. A single better-chosen measure, today's high-to-low swing, matched the models exactly. Before crediting a model, check what one good feature or one line can do.
+
+**Compare like with like.** A rule predicts the same days as the model and agrees with it on most of them. Those shared days say nothing about which is better, so only the days they disagree count (the paired test). On SPY, that's 933 days, split 466 to 467.
+
+**How you use a prediction can matter more than how good it is.** Deciding once a week instead of every day cut trades by about three quarters and lifted the strategy's Sharpe ratio more than any change of model did.
+
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
 ## Planned work and open decisions
@@ -311,6 +352,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [x] **Phase 2, automated tests:** `pytest` checks for look-ahead, labels, walk-forward, backtest arithmetic and pattern detection; no internet needed
 - [x] **Phase 3, any stock:** notebook becomes a template; `python run.py NVDA` creates and runs `reports/NVDA.ipynb` (papermill); reports for SPY, NVDA, AAPL, GOOGL; comparison notebook with a lucky-winners warning
 - [x] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
+- [x] **Phase 4.1, a tougher bar:** "Recent swing" baseline, paired test against rules, weekly half-on-big strategy with a weekly luck check
 - [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
 - [ ] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's
 - [ ] **Phase 7, write-up:** result charts in the README; Conclusions written
@@ -347,11 +389,13 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Leak (look-ahead) | Future information slipping into features or training, which makes results look better than they could be in real life |
 | LSTM | A neural network built for sequences; needs PyTorch or TensorFlow |
 | Max drawdown | The worst fall from a peak to a low |
+| McNemar's test (paired test) | Comparing two predictors on the same days by counting only the days they disagree: if they were equally good, each would win about half |
 | Multicollinearity | Features that move together, so a model can split or cancel weight between them |
 | Overfitting | A model fitting noise in the training data that doesn't repeat later |
 | p-value | Chance of a result at least this good from pure luck |
 | papermill | A tool that fills in a notebook's settings cell and runs every cell, saving the result |
 | Random walk | Prices where every day's move is pure chance |
+| Recent swing | The one-line move-size rule: predict a big day when today's high-to-low swing was wider than its median over the past 250 trading days |
 | scikit-learn | The Python library that provides the models and data-preparation tools |
 | Sharpe ratio | Return per unit of volatility; higher is better |
 | Virtual environment (.venv) | A private set of Python libraries for this project only |
@@ -363,6 +407,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 16 Oct 2026 | Phase 4.1 built | Recent swing baseline (`wide_range` column), paired test (`paired_p_value`), weekly strategy (`hold_for_week`) with a whole-week luck check; Part 2 of the report and the comparison judged against Recent swing; luck correction counts daily and weekly strategies; 10 new tests (77 total), checked by planting 7 bugs (one was missed at first, so a test was added); checked end to end on SPY plus a fake stock. On SPY the rule ties logistic regression (61.65% vs 61.62%) |
 | 15 Oct 2026 | Four-stock run with Part 2 | Move size: 8 of 8 beat "same as today" after the correction; half-on-big: 0 of 8 beat luck. Logistic regression chosen as the move-size model for phase 6 |
 | 15 Oct 2026 | Phase 4 built | Move-size task in every report (Part 2) and in the comparison; new features, label, baselines, clustered-volatility fake prices, half-position backtest, luck check on Sharpe; 21 new tests (67 total), each new bug type checked by planting it; checked on the saved SPY data plus fake stocks |
 | 12 Oct 2026 | NVDA/GOOGL match checked | Identical "always up" accuracy traced to equal up-day counts by coincidence (issue 19) |

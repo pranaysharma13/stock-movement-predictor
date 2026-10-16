@@ -103,8 +103,13 @@ VOL_FEATURES = [
 
 
 def make_vol_features(prices):
-    """Move-size features, plus typical_move: the median size of a daily move
-    over the past TYPICAL_WINDOW days, up to and including today."""
+    """Move-size features, plus two extra columns that aren't model features:
+
+      typical_move: the median size of a daily move over the past
+                    TYPICAL_WINDOW days, up to and including today
+      wide_range:   1 if today's high-to-low swing is wider than its median
+                    over the same days, else 0 (the "Recent swing" baseline)
+    """
 
     close = prices["Close"]
     daily_ret = close / close.shift(1) - 1
@@ -115,7 +120,10 @@ def make_vol_features(prices):
     f["abs_ret_rel"] = daily_ret.abs() / typical
     f["vol_5d_rel"] = daily_ret.rolling(5).std() / typical
     f["vol_20d_rel"] = daily_ret.rolling(20).std() / typical
-    f["range_rel"] = (prices["High"] - prices["Low"]) / close / typical
+    day_range = (prices["High"] - prices["Low"]) / close
+    f["range_rel"] = day_range / typical
+    usual_range = day_range.rolling(TYPICAL_WINDOW).median()
+    f["wide_range"] = (day_range > usual_range).astype(float).where(usual_range.notna())
     f["volume_ratio"] = prices["Volume"] / prices["Volume"].rolling(20).mean() - 1
     return f.replace([np.inf, -np.inf], np.nan)
 
@@ -136,5 +144,6 @@ def build_vol_dataset(prices):
     close = prices["Close"]
     data["next_ret"] = close.shift(-1) / close - 1
     data = data.dropna()
+    data["wide_range"] = data["wide_range"].astype(int)
     data["target"] = (data["next_ret"].abs() > data["typical_move"]).astype(int)
     return data

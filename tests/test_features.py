@@ -151,3 +151,17 @@ def test_vol_feature_list_matches(long_prices):
     cols = make_vol_features(long_prices).columns
     assert set(VOL_FEATURES) <= set(cols)
     assert "typical_move" in cols
+
+
+def test_wide_range_is_the_recent_swing_rule(long_prices):
+    """wide_range on day t: today's high-to-low swing beats its median over the 250 days ending on day t."""
+
+    feats = make_vol_features(long_prices)
+    day_range = (long_prices["High"] - long_prices["Low"]) / long_prices["Close"]
+    for t in [300, 450, 650]:
+        usual = day_range.iloc[t - TYPICAL_WINDOW + 1: t + 1].median()
+        assert feats["wide_range"].iloc[t] == float(day_range.iloc[t] > usual)
+    assert feats["wide_range"].iloc[: TYPICAL_WINDOW - 1].isna().all()   # not enough history yet
+    data = build_vol_dataset(long_prices)
+    assert set(data["wide_range"].unique()) <= {0, 1}
+    assert "wide_range" not in VOL_FEATURES                             # a baseline, not a model feature

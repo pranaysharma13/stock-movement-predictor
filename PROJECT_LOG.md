@@ -8,7 +8,7 @@ No model predicts tomorrow's direction better than "always predict up" on any of
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; two tasks (direction, and big vs. small moves) with 5 price-based features each; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–4.2 are built: fixes, 106 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Phase 4.2 fixed the findings of an independent code review: four bugs, consistent statistics (paired tests everywhere, the Holm correction) and interest on cash. Next: re-run the four stocks, then phase 5 (LSTM).
+- **Status:** phases 1–4.2 are built: fixes, 106 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Phase 4.2 fixed the findings of an independent code review: four bugs, consistent statistics (paired tests everywhere, the Holm correction) and interest on cash. Next: phase 5 (LSTM).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -114,7 +114,28 @@ In the comparison, Part 2 now shows two edge charts (against "same as today", th
 
 ## Results so far
 
-The four-stock tables below were made before phase 4.2, which changes some numbers slightly (paired tests in Part 1, Holm, interest on cash); the re-run will be added here. Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule; on single stocks, logistic regression beats it by a small margin. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule; on single stocks, logistic regression beats it by a small margin. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+
+### After phase 4.2: four stocks, with interest on cash
+
+Run locally on 16 October 2026 with `python run.py SPY NVDA AAPL GOOGL`, on freshly downloaded prices; test period 4 January 2010 to 14 October 2026 (4,221 days) for every stock. Cash earned 1.48% a year on average (13-week Treasury bills), and every Sharpe ratio is now on returns above cash. Edge is accuracy minus Recent swing, in percentage points, with its 95% range from the paired counts; the worst drop and luck share are for the weekly version.
+
+| Stock | Model | Accuracy | Recent swing | Edge | p-value | Sharpe, daily | Sharpe, weekly | Sharpe, buy and hold | Worst drop, weekly | Worst drop, buy and hold | Luck share, weekly |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| SPY | Logistic regression | 61.7% | 61.6% | +0.05 ± 1.4 | 0.49 | 0.61 | 0.76 | 0.77 | -23.3% | -33.7% | 0.44 |
+| SPY | Gradient boosting | 61.6% | 61.6% | -0.05 ± 1.4 | 0.54 | 0.50 | 0.78 | 0.77 | -18.6% | -33.7% | 0.31 |
+| NVDA | Logistic regression | 57.4% | 55.1% | +2.3 ± 1.6 | 0.002 | 0.97 | 1.06 | 1.01 | -49.9% | -66.3% | 0.090 |
+| NVDA | Gradient boosting | 55.7% | 55.1% | +0.6 ± 1.8 | 0.25 | 0.86 | 1.05 | 1.01 | -50.1% | -66.3% | 0.098 |
+| AAPL | Logistic regression | 58.1% | 56.5% | +1.7 ± 1.4 | 0.013 | 0.96 | 0.99 | 0.93 | -35.0% | -43.8% | 0.094 |
+| AAPL | Gradient boosting | 56.5% | 56.5% | +0.05 ± 1.6 | 0.49 | 0.77 | 0.90 | 0.93 | -40.4% | -43.8% | 0.43 |
+| GOOGL | Logistic regression | 56.4% | 54.7% | +1.7 ± 1.5 | 0.013 | 0.65 | 0.76 | 0.75 | -40.6% | -44.3% | 0.28 |
+| GOOGL | Gradient boosting | 55.5% | 54.7% | +0.8 ± 1.7 | 0.19 | 0.61 | 0.70 | 0.75 | -40.4% | -44.3% | 0.60 |
+
+- **The conclusions from phase 4.1 all hold.** Direction: 0 of 8 beat "always up". Move size against Recent swing: 3 of 8 pass at 5%, 1 of 8 after the Holm correction (NVDA logistic regression, p = 0.002); Holm gives the same answer Bonferroni did. Against "same as today": 8 of 8. Strategies: 0 of 16 pass the luck check.
+- **Interest on cash lowers every Sharpe ratio by about the same amount,** so no comparison flips. Buy-and-hold drops by 0.04 to 0.09 (SPY 0.86 to 0.77). Logistic regression's weekly version still beats buy-and-hold's Sharpe on NVDA, AAPL and GOOGL by 0.01 to 0.06, as before, and still trails slightly on SPY.
+- **Weekly beats daily in all 8 rows,** by 0.03 to 0.28 in Sharpe.
+- **SPY's direction lead is unchanged:** logistic regression earns 14.9% a year against 14.1% for buy-and-hold (Sharpe 0.84 vs 0.77), with a luck share of 0.047: a pass at 5%, not after the correction.
+- **Gradient boosting moved again; logistic regression didn't.** On SPY, gradient boosting's move-size accuracy went from 61.2% in the check on the old saved file to 61.6% on the fresh download (5 more days, and Yahoo's small revisions to past rows), while logistic regression stayed at 61.7%.
 
 ### After phase 4.2: SPY check, without interest on cash
 
@@ -400,7 +421,7 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **Get a second pair of eyes.** An independent review found four bugs and several inconsistencies that 77 passing tests had missed, because the tests only checked what had been thought of. Every finding now has a test of its own.
 
-**Small changes can expose a fragile model.** Leaving out 17 training days changed gradient boosting's predictions on 146 days; logistic regression barely moved. A model whose output depends on a handful of rows is fitting noise.
+**Small changes can expose a fragile model.** Leaving out 17 training days changed gradient boosting's predictions on 146 days; logistic regression barely moved. A fresh download, with 5 more days and Yahoo's small revisions to old rows, then moved its SPY accuracy by another 0.4 points, while logistic regression stayed put. A model whose output depends on a handful of rows is fitting noise.
 
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
 
@@ -477,6 +498,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 16 Oct 2026 | Four-stock run with phase 4.2 | Fresh prices to 14 Oct 2026 and interest on cash (1.48% a year on average); conclusions unchanged: 0 of 8 direction, 1 of 8 move size against Recent swing after Holm (NVDA), 0 of 16 strategies beat luck; interest lowers every Sharpe ratio by a similar amount |
 | 16 Oct 2026 | Phase 4.2 built | Fixes for an independent code review (issues 23–37): Part 2 uses `--first-test-year`; failed runs keep the last good report; `--comparison-only` and `--no-interest`; clear errors for tickers without volume; paired tests and Holm everywhere, with chart ranges from the paired counts; interest on cash and Sharpe on excess returns; last training day left out; 6 pm cutoff and High/Low repairs; luck share never 0. 29 new tests (106 total), checked by planting 18 bugs (3 missed at first, so 3 tests were added); checked end to end on SPY plus a fake stock |
 | 16 Oct 2026 | Four-stock run with phase 4.1 | Logistic regression beats Recent swing on NVDA, AAPL and GOOGL (3 of 8 at 5%, 1 of 8 after the correction) and ties on SPY; weekly beats daily in all 8 rows; 0 of 16 strategies pass the luck check |
 | 16 Oct 2026 | Phase 4.1 built | Recent swing baseline (`wide_range` column), paired test (`paired_p_value`), weekly strategy (`hold_for_week`) with a whole-week luck check; Part 2 of the report and the comparison judged against Recent swing; luck correction counts daily and weekly strategies; 10 new tests (77 total), checked by planting 7 bugs (one was missed at first, so a test was added); checked end to end on SPY plus a fake stock. On SPY the rule ties logistic regression (61.65% vs 61.62%) |

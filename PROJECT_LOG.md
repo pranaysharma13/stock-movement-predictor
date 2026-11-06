@@ -344,10 +344,11 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Thirty-eight issues so far: thirty-five fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
+Thirty-nine issues so far: thirty-six fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 39 | The first forward-test run warned that `actions/checkout@v4` and `actions/setup-python@v5` are built for Node.js 20, which GitHub is retiring | 6 Nov 2026 | Fixed | Workflow moved to `actions/checkout@v5` and `actions/setup-python@v6`. A notice that `ubuntu-latest` moves to Ubuntu 26 needs no change: Python and the libraries are pinned |
 | 38 | The phase 6 plan said about a year of forward testing could confirm or rule out move-size edges of 1.5 to 2.5 points | 6 Nov 2026 | Fixed | Worked out while writing the scorecard: model and rule agree on about 4 days in 5, so only the rest carry evidence, and an edge that size needs about 1,400 to 3,800 scored days, roughly 1.5 to 4 years with all four stocks together. A year can catch a large edge or rule one out. The scorecard, README and this log now say so |
 | 37 | Small inconsistencies: cache file names didn't use the safe ticker name; `walk_forward`'s column was called `prob_up` even for big days; missing predictions were silently counted as wrong; trailing spaces; no way to rebuild only the comparison | 16 Oct 2026 | Fixed | Phase 4.2: safe names (`^IRX` → `_IRX_from_…csv`); column renamed `prob`; missing predictions raise an error; `--comparison-only` |
 | 36 | The README said Python 3.10, but pandas 3.0 needs 3.11; no record of exact library versions | 16 Oct 2026 | Fixed | README now says 3.11; `requirements-lock.txt` committed (6 Nov 2026) |
@@ -471,7 +472,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 ### My own tasks
 
-- [ ] Turn on the forward test: push, then **Settings → Actions → General → Workflow permissions → Read and write permissions**, then **Actions → Forward test → Run workflow** once to check it
+- [x] Turn on the forward test: push, then **Settings → Actions → General → Workflow permissions → Read and write permissions**, then **Actions → Forward test → Run workflow** once to check it
 - [ ] From then on, `git pull` before starting work, since the job commits every weekday
 - [x] `git rm --cached .DS_Store`, then commit (issue 35)
 - [x] `pip freeze > requirements-lock.txt`, then commit (issue 36)
@@ -516,6 +517,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 6 Nov 2026 | Forward test switched on | First run (by hand) succeeded in 51 seconds and recorded predictions from the 6 November close; the lock-file versions install fine on GitHub's Linux machines. Workflow updated to `checkout@v5` and `setup-python@v6` (issue 39). Runs every weekday from here on |
 | 6 Nov 2026 | Phase 6 built | Live forward test: `src/forward.py` (predictions, outcomes, append-only log, scorecard), `forward_test.py` (one evening's run, with retries), `.github/workflows/forward-test.yml` (weekdays at 23:30 UTC, commits `forward_test/`), `requirements-forward.txt`; 18 new tests (124 total), checked by planting 12 bugs (1 missed at first because two rules gave the same p-value on the test data, so the data was changed); simulated over 22 evenings on the saved SPY prices. Plan's estimate of how long the test needs corrected (issue 38) |
 | 6 Nov 2026 | Issues 35 and 36 closed | No `.DS_Store` tracked; `requirements-lock.txt` committed |
 | 16 Oct 2026 | Four-stock run with phase 4.2 | Fresh prices to 14 Oct 2026 and interest on cash (1.48% a year on average); conclusions unchanged: 0 of 8 direction, 1 of 8 move size against Recent swing after Holm (NVDA), 0 of 16 strategies beat luck; interest lowers every Sharpe ratio by a similar amount |

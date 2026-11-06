@@ -17,6 +17,7 @@ Both are tested honestly:
 - **Luck check:** any backtest edge is compared with sitting out the same number of random days.
 - **Pipeline checks both ways:** the same code must find nothing in pure-chance prices (no leaked future information) and must find a pattern planted on purpose (it can detect a real signal).
 - **Lucky-winners correction:** when several stocks and models are compared, results must clear a stricter bar (the Holm correction), because some will "win" by chance alone.
+- **A live forward test:** every weekday evening, a scheduled job on GitHub writes down tomorrow's predictions before the day happens, then scores them once it has. It's the one test hindsight can't touch.
 - **Does it help?** Move-size predictions are turned into a strategy that halves the position on predicted big days, deciding daily or once a week, judged on risk (Sharpe ratio, worst drop) after trading costs.
 
 For the full story (decisions, how to read every output, results, issues found and fixed, and lessons learned), see the [Project Log](PROJECT_LOG.md).
@@ -30,11 +31,13 @@ For the full story (decisions, how to read every output, results, issues found a
 ```
 Stock_Movement_Predictor/
 ├── run.py                       one command to create the reports
+├── forward_test.py              one day of the live forward test (run by GitHub every weekday)
 ├── src/
 │   ├── data.py                  download and cache prices; fake prices for the pipeline checks
 │   ├── features.py              features and labels for both tasks
 │   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
-│   └── report.py                per-stock summaries and the cross-stock comparison
+│   ├── report.py                per-stock summaries and the cross-stock comparison
+│   └── forward.py               the forward test: predictions, outcomes, scorecard
 ├── notebooks/
 │   ├── template.ipynb           the analysis for one stock, both parts (run.py fills in the ticker)
 │   └── comparison_template.ipynb  the side-by-side comparison
@@ -42,10 +45,16 @@ Stock_Movement_Predictor/
 │   ├── SPY.ipynb, NVDA.ipynb, ...   one finished report per stock
 │   ├── comparison.ipynb
 │   └── summaries/               each stock's headline numbers (used by the comparison)
+├── forward_test/                written by the daily job
+│   ├── predictions.csv          every prediction, and later its outcome
+│   └── scorecard.md             results so far
+├── .github/workflows/forward-test.yml   the schedule
 ├── tests/                       automated checks, run with `pytest`
 ├── PROJECT_LOG.md               decisions, results, issues and lessons, kept up to date
 ├── pytest.ini                   test settings
-└── requirements.txt
+├── requirements.txt
+├── requirements-lock.txt        the exact library versions the reports were made with
+└── requirements-forward.txt     the few libraries the daily job needs
 ```
 
 The logic lives in `src/` as small, plain functions. The notebooks import them and tell the story.
@@ -112,6 +121,29 @@ If you download before 6 pm New York time, today's row is left out automatically
 
 Tickers without trading volume, such as `^VIX` or currency pairs, stop with a clear message: one of the features needs volume.
 
+## The live forward test
+
+Every backtest above is about the past, and the past can mislead in subtle ways: features, stocks and rules were all chosen by people who had seen it. The forward test removes that. Every weekday at 23:30 UTC (6:30 pm New York in winter, 7:30 pm in summer), a GitHub Actions job:
+
+1. downloads the latest prices for SPY, NVDA, AAPL and GOOGL;
+2. fills in what actually happened for the previous day's predictions;
+3. trains logistic regression on all history up to today, for direction and for move size, and writes down tomorrow's predictions, with the Recent swing and "same as today" rules for comparison;
+4. updates [`forward_test/scorecard.md`](forward_test/scorecard.md) and commits both files.
+
+Because each day's predictions are committed before the day they predict, the git history proves when they were made. Past predictions are never changed: the code only adds rows and fills in empty outcomes, and refuses to save if anything else changed.
+
+**Setting it up (once).** Push the project to GitHub, then in the repository go to **Settings → Actions → General → Workflow permissions**, choose **Read and write permissions** and save. To check it works, open the **Actions** tab, pick **Forward test** and click **Run workflow**. It takes about two minutes.
+
+**Day to day.** The job commits to `main` on its own, so your copy falls behind. Run `git pull` before you start work, or GitHub will refuse your next `git push` until you do.
+
+**Reading the scorecard.** Expect early numbers to swing: after 20 days an accuracy is uncertain by about ±20 points. The backtests found move-size edges of 1.5 to 2.5 points, and confirming an edge that size takes roughly 1.5 to 4 years of data with all four stocks together; a year is enough to catch a large edge or rule one out.
+
+**Notes.**
+- `python forward_test.py` also runs on your Mac, for trying it out, but the official record is the one the scheduled job commits: don't commit local results.
+- If Yahoo refuses a download, the job tries again, then records the other stocks and marks the run as failed; that day is simply missing for that stock.
+- In a public repository, GitHub may pause scheduled jobs after 60 days without activity, and emails you if it does; one click on the Actions tab re-enables it.
+- To stop the forward test, open **Actions → Forward test**, click **⋯** and choose **Disable workflow**.
+
 ## Running the tests
 
 With the virtual environment active, from the project folder:
@@ -127,6 +159,7 @@ It takes a few seconds and needs no internet: every test runs on small fake pric
 | `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series; clear errors for prices without volume or with too little history |
 | `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
 | `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
+| `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; the log only grows, and the safety check refuses edited predictions or outcomes; two evenings and a holiday in a row work end to end; one failed download doesn't stop the others; downloads are retried |
 | `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only` and `--no-interest` work; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
 The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report): each one makes at least one test fail.

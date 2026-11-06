@@ -1,0 +1,50 @@
+# The live forward test: every weekday after the US close, record tomorrow's
+# predictions and fill in yesterday's outcomes, then commit the results.
+# Results: forward_test/predictions.csv and forward_test/scorecard.md
+name: Forward test
+
+on:
+  schedule:
+    # 23:30 UTC = 6:30 pm New York in winter, 7:30 pm in summer: after the 6 pm cutoff.
+    # GitHub can start scheduled jobs late at busy times; that's fine here.
+    - cron: "30 23 * * 1-5"
+  workflow_dispatch:   # the "Run workflow" button, for running it by hand
+
+permissions:
+  contents: write      # needed to commit the results
+
+concurrency:
+  group: forward-test  # never two runs at once
+  cancel-in-progress: false
+
+jobs:
+  forward-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install libraries
+        # The same versions as the reports, from requirements-lock.txt, for the libraries the job needs
+        run: pip install -r requirements-forward.txt -c requirements-lock.txt
+
+      - name: Run the forward test
+        run: python forward_test.py
+
+      - name: Save the results
+        if: always()   # save what worked, even if one stock failed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add forward_test/
+          if git diff --cached --quiet; then
+            echo "Nothing new to save."
+          else
+            git commit -m "Forward test: $(date -u +%Y-%m-%d)"
+            git push
+          fi

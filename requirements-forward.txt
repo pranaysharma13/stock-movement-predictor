@@ -1,0 +1,7 @@
+# Only what the daily forward test needs (see .github/workflows/forward-test.yml).
+# The workflow installs these at the versions in requirements-lock.txt.
+pandas
+numpy
+scipy
+scikit-learn
+yfinance

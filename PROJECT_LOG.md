@@ -1,6 +1,6 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 16 October 2026 (phase 4.2). A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
+*Last updated: 6 November 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
 
 ## Overview
 
@@ -333,13 +333,13 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Thirty-seven issues so far: thirty-two fixed or worked around, two open (steps for me), one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
+Thirty-seven issues so far: thirty-four fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
 | 37 | Small inconsistencies: cache file names didn't use the safe ticker name; `walk_forward`'s column was called `prob_up` even for big days; missing predictions were silently counted as wrong; trailing spaces; no way to rebuild only the comparison | 16 Oct 2026 | Fixed | Phase 4.2: safe names (`^IRX` → `_IRX_from_…csv`); column renamed `prob`; missing predictions raise an error; `--comparison-only` |
-| 36 | The README said Python 3.10, but pandas 3.0 needs 3.11; no record of exact library versions | 16 Oct 2026 | Open | README now says 3.11; on my side: `pip freeze > requirements-lock.txt` and commit it |
-| 35 | `.DS_Store` is committed even though `.gitignore` lists it | 16 Oct 2026 | Open | On my side: `git rm --cached .DS_Store`, then commit |
+| 36 | The README said Python 3.10, but pandas 3.0 needs 3.11; no record of exact library versions | 16 Oct 2026 | Fixed | README now says 3.11; `requirements-lock.txt` committed (6 Nov 2026) |
+| 35 | `.DS_Store` is committed even though `.gitignore` lists it | 16 Oct 2026 | Fixed | Checked 6 Nov 2026: `git ls-files` shows no `.DS_Store` tracked anywhere, so it was already removed |
 | 34 | The weekly strategy treated the last day in the data as a week end, even mid-week | 16 Oct 2026 | Fixed | The last day only counts as a week end on a Friday |
 | 33 | Yahoo was still adjusting a row downloaded at 4:36 pm (Open above High); a few old SPY rows had High or Low not containing Open or Close | 16 Oct 2026 | Fixed | Cutoff moved to 6 pm New York time; such rows are repaired (High and Low widened; Close never changed) and listed in each report |
 | 32 | When predicting year Y, the last training row's label used the first closing price of year Y | 16 Oct 2026 | Fixed | That day is left out of each training set; negligible for logistic regression, but it changes gradient boosting's predictions on 146 SPY days |
@@ -456,8 +456,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 ### My own tasks
 
-- [ ] `git rm --cached .DS_Store`, then commit (issue 35)
-- [ ] `pip freeze > requirements-lock.txt`, then commit (issue 36)
+- [x] `git rm --cached .DS_Store`, then commit (issue 35)
+- [x] `pip freeze > requirements-lock.txt`, then commit (issue 36)
 - [ ] Experiment: `LogisticRegression(max_iter=1000, class_weight="balanced")` in `src/evaluate.py`; guess the outcome before running
 - [ ] Experiment: trade only when the model is confident, e.g. `prob_up > 0.55`
 - [ ] Write the Conclusions (phase 7)

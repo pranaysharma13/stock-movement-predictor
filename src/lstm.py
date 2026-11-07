@@ -32,6 +32,8 @@ from .features import TYPICAL_WINDOW
 WINDOW = 60
 INPUTS = ["ret_rel", "range_rel", "volume_ratio"]
 SEEDS = (0, 1, 2)
+HIDDEN = 32       # units in the LSTM layer
+EPOCHS = 20       # most epochs tried in the validation run
 
 
 def torch_available():
@@ -119,8 +121,16 @@ def _network(n_inputs, hidden, dropout):
     return SequenceClassifier()
 
 
-def _train(X, y, seed, epochs, hidden, dropout, lr, batch, X_val=None, y_val=None, patience=3):
-    """Train one network. With validation data, stop early and return the best epoch count."""
+def _train(X, y, seed, epochs, hidden, dropout, lr, batch, X_val=None, y_val=None, patience=3,
+           history=None, on_epoch=None):
+    """Train one network. With validation data, stop early and return the best epoch count.
+
+    history:  optional list; each epoch appends {"epoch", "train loss", "validation loss"}
+              (validation loss is None without validation data). Only for charts.
+    on_epoch: optional function called as on_epoch(net, epoch) before training (epoch 0)
+              and after each epoch, for the training animation. It must not change the network.
+    Neither changes the training: the same seed gives the same network either way.
+    """
 
     import torch
 
@@ -131,18 +141,29 @@ def _train(X, y, seed, epochs, hidden, dropout, lr, batch, X_val=None, y_val=Non
     loss_fn = torch.nn.BCEWithLogitsLoss()
     Xt, yt = torch.from_numpy(X), torch.from_numpy(y.astype(np.float32))
     best_loss, best_epoch, stale = np.inf, 1, 0
+    if on_epoch is not None:
+        on_epoch(net, 0)                                  # the starting weights
     for epoch in range(1, epochs + 1):
         net.train()
         order = rng.permutation(len(Xt))
+        total = 0.0
         for start in range(0, len(order), batch):
             idx = order[start:start + batch]
             opt.zero_grad()
-            loss_fn(net(Xt[idx]), yt[idx]).backward()
+            batch_loss = loss_fn(net(Xt[idx]), yt[idx])
+            batch_loss.backward()
             opt.step()
+            total += batch_loss.item() * len(idx)       # reading the loss changes nothing
+        loss = None
         if X_val is not None:
             # validation loss changes smoothly; validation accuracy jumps about from one epoch to the next
             p = np.clip(_probs(net, X_val), 1e-6, 1 - 1e-6)
             loss = float(-np.mean(y_val * np.log(p) + (1 - y_val) * np.log(1 - p)))
+        if history is not None:
+            history.append({"epoch": epoch, "train loss": total / len(order), "validation loss": loss})
+        if on_epoch is not None:
+            on_epoch(net, epoch)
+        if loss is not None:
             if loss < best_loss - 1e-5:
                 best_loss, best_epoch, stale = loss, epoch, 0
             else:
@@ -161,8 +182,24 @@ def _probs(net, X):
 
 # ---------------------------- walk-forward ------------------------------------
 
-def lstm_walk_forward(prices, data, first_year, seeds=SEEDS, window=WINDOW, epochs=20,
-                      hidden=32, dropout=0.2, lr=1e-3, batch=128, record=None):
+def year_split(days, year):
+    """Positions in days of the training, test, validation-fit and validation days for one test year.
+
+    Training: every day before the test year except the last, whose label is the
+    first test day's move. Validation: the last training year; validation-fit:
+    the years before it, again without their last day, whose label is in the
+    validation year.
+    """
+
+    train_idx = np.flatnonzero(days.year < year)[:-1]
+    test_idx = np.flatnonzero(days.year == year)
+    val_mask = days[train_idx].year == year - 1
+    fit_idx, val_idx = train_idx[~val_mask][:-1], train_idx[val_mask]
+    return train_idx, test_idx, fit_idx, val_idx
+
+
+def lstm_walk_forward(prices, data, first_year, seeds=SEEDS, window=WINDOW, epochs=EPOCHS,
+                      hidden=HIDDEN, dropout=0.2, lr=1e-3, batch=128, record=None, curves=None):
     """Walk-forward test of the LSTM, the same way as walk_forward() in evaluate.py.
 
     prices: the stock's prices (the sequences are built from them)
@@ -170,6 +207,9 @@ def lstm_walk_forward(prices, data, first_year, seeds=SEEDS, window=WINDOW, epoc
             gives the days and its target column the labels
     record: optional list; each year appends (year, last training day,
             last validation-fit day, best epoch count), for checking
+    curves: optional list; each year and seed appends {"year", "seed", "best epoch",
+            "validation run", "final run"}, the per-epoch losses of both runs
+            (see _train), for the training charts. It doesn't change any prediction.
 
     Returns a DataFrame indexed like the test days of data, with:
       prob   the average of the seeds' probabilities that target is 1
@@ -184,14 +224,9 @@ def lstm_walk_forward(prices, data, first_year, seeds=SEEDS, window=WINDOW, epoc
     years = sorted(set(data.index.year[data.index.year >= first_year]))
     chunks = []
     for year in years:
-        before = days.year < year
-        # leave out the last training day: its label is the first test day's move
-        train_idx = np.flatnonzero(before)[:-1]
-        test_idx = np.flatnonzero(days.year == year)
+        train_idx, test_idx, fit_idx, val_idx = year_split(days, year)
         if len(test_idx) == 0:
             continue
-        val_mask = days[train_idx].year == year - 1
-        fit_idx, val_idx = train_idx[~val_mask][:-1], train_idx[val_mask]
         last_train, last_fit = days[train_idx[-1]], days[fit_idx[-1]]
         # Scaling for the final fit uses the training years only; for the
         # validation step, only the years before the validation year.
@@ -200,11 +235,16 @@ def lstm_walk_forward(prices, data, first_year, seeds=SEEDS, window=WINDOW, epoc
         X_fit, X_val = scale(X_all[fit_idx], fit_scaler_), scale(X_all[val_idx], fit_scaler_)
         probs, best_epochs = [], []
         for seed in seeds:
+            pick_history, final_history = [], []
             # 1. find how many epochs help, using the last training year as validation
             _, best = _train(X_fit, y_all[fit_idx], seed, epochs, hidden, dropout, lr, batch,
-                             X_val, y_all[val_idx])
+                             X_val, y_all[val_idx], history=pick_history)
             # 2. retrain on all training years for that many epochs
-            net, _ = _train(X_train, y_all[train_idx], seed, best, hidden, dropout, lr, batch)
+            net, _ = _train(X_train, y_all[train_idx], seed, best, hidden, dropout, lr, batch,
+                            history=final_history)
+            if curves is not None:
+                curves.append({"year": year, "seed": seed, "best epoch": best,
+                               "validation run": pick_history, "final run": final_history})
             probs.append(_probs(net, X_test))
             best_epochs.append(best)
         if record is not None:

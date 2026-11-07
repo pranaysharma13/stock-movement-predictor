@@ -32,13 +32,15 @@ For the full story (decisions, how to read every output, results, issues found a
 Stock_Movement_Predictor/
 ├── run.py                       one command to create the reports
 ├── forward_test.py              one day of the live forward test (run by GitHub every weekday)
+├── make_lstm_pictures.py        the LSTM diagram and training animation in docs/ (needs PyTorch)
 ├── src/
 │   ├── data.py                  download and cache prices; fake prices for the pipeline checks
 │   ├── features.py              features and labels for both tasks
 │   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
 │   ├── report.py                per-stock summaries and the cross-stock comparison
 │   ├── forward.py               the forward test: predictions, outcomes, scorecard
-│   └── lstm.py                  the optional LSTM (needs PyTorch)
+│   ├── lstm.py                  the optional LSTM (needs PyTorch)
+│   └── lstm_plots.py            the LSTM's diagram and training charts
 ├── notebooks/
 │   ├── template.ipynb           the analysis for one stock, both parts (run.py fills in the ticker)
 │   └── comparison_template.ipynb  the side-by-side comparison
@@ -50,6 +52,7 @@ Stock_Movement_Predictor/
 │   ├── predictions.csv          every prediction, and later its outcome
 │   └── scorecard.md             results so far
 ├── .github/workflows/forward-test.yml   the schedule
+├── docs/                        pictures for this README, made by make_lstm_pictures.py
 ├── tests/                       automated checks, run with `pytest`
 ├── PROJECT_LOG.md               decisions, results, issues and lessons, kept up to date
 ├── pytest.ini                   test settings
@@ -137,6 +140,21 @@ python run.py SPY NVDA AAPL GOOGL --lstm    # several minutes per stock
 
 With `--lstm`, the LSTM appears as a third model in every table, backtest, luck check and pipeline check, and each report and the comparison gain a section testing it against logistic regression (paired test, with the Holm correction in the comparison). It isn't part of the live forward test.
 
+![The LSTM: three inputs per day, read one day at a time for 60 days, into 32 memory units and one probability](docs/lstm_network.png)
+
+Each report made with `--lstm` also shows how the LSTM trained, for both tasks: learning curves (validation and training loss, epoch by epoch, for every test year and seed, with the epoch early stopping chose), the number of epochs chosen each year, and how confident its predictions are next to logistic regression's. These charts only draw numbers recorded during training: a test checks that recording them changes no prediction.
+
+To see one network learn:
+
+```bash
+python make_lstm_pictures.py                 # SPY, move size, the latest full test year
+python make_lstm_pictures.py NVDA --year 2020 --task direction
+```
+
+It trains a single network (one stock, one year, one seed) for every epoch, without stopping early, and saves `docs/lstm_network.png` and `docs/lstm_training.gif`: the weights, blue for positive and orange for negative and thicker the larger, next to the losses, with the epoch early stopping would have chosen. It takes seconds, uses the saved prices, and never touches the reports or the forward test.
+
+![One network training: its weights epoch by epoch, next to its training and validation loss](docs/lstm_training.gif)
+
 ## The live forward test
 
 Every backtest above is about the past, and the past can mislead in subtle ways: features, stocks and rules were all chosen by people who had seen it. The forward test removes that. Every weekday at 23:30 UTC (6:30 pm New York in winter, 7:30 pm in summer), a GitHub Actions job:
@@ -168,16 +186,17 @@ With the virtual environment active, from the project folder:
 pytest
 ```
 
-It takes a few seconds and needs no internet: every test runs on small fake price series. A green line of dots and "passed" means everything works; a failure names the test and shows what went wrong. Run it after any change to `src/`, `run.py` or the templates.
+It needs no internet: every test runs on small fake price series. Without PyTorch it takes a few seconds; with it, the LSTM tests add a few minutes. A green line of dots and "passed" means everything works; a failure names the test and shows what went wrong. Run it after any change to `src/`, `run.py` or the templates.
 
 | Test file | What it checks |
 |---|---|
 | `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series; clear errors for prices without volume or with too little history |
 | `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
 | `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
-| `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise |
+| `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise; recording the training for the charts changes no prediction, and predictions on fixed fake prices are unchanged since phase 5; the recorded curves match what training did; the animation shows the real training run, epoch for epoch, and the picture script writes both files |
+| `test_lstm_plots.py` | The network diagram draws every node and line once, with line colour and thickness following the weights; the training charts draw from recorded curves without needing PyTorch |
 | `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; the log only grows, and the safety check refuses edited predictions or outcomes; two evenings and a holiday in a row work end to end; one failed download doesn't stop the others; downloads are retried; its predictions on fixed fake prices are unchanged since it started, and it doesn't depend on the LSTM |
-| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
+| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs, and the template draws the LSTM's training charts |
 
 The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report): each one makes at least one test fail.
 

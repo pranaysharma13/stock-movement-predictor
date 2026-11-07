@@ -492,3 +492,11 @@ def test_lstm_says_how_to_install_pytorch(monkeypatch):
     monkeypatch.setattr(src.lstm, "torch_available", lambda: False)
     with pytest.raises(ImportError, match="requirements-lstm.txt"):
         src.lstm.require_torch()
+
+
+def test_template_draws_the_lstm_training_charts():
+    source = "\n".join(c.source for c in nbformat.read(ROOT / "notebooks" / "template.ipynb", as_version=4).cells)
+    for needed in ["curves=lstm_curves, record=lstm_record", "curves=vol_lstm_curves, record=vol_lstm_record",
+                   "draw_network(ax)", "plot_learning_curves(lstm_curves", "plot_learning_curves(vol_lstm_curves",
+                   "plot_epochs_chosen(vol_lstm_record", 'plot_confidence(vol_model_preds["LSTM"]["prob"]']:
+        assert needed in source, needed

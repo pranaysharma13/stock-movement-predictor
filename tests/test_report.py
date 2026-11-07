@@ -17,8 +17,8 @@ from src.evaluate import get_models, walk_forward
 from src.features import build_dataset
 from src.evaluate import paired_p_value, vol_baseline_predictions
 from src.features import VOL_FEATURES, build_vol_dataset
-from src.report import (comparison_table, half_on_big, holm, load_summaries, safe_name,
-                        save_summary, summarize, summarize_vol)
+from src.report import (comparison_table, half_on_big, holm, load_summaries, lstm_comparison,
+                        lstm_vs_logreg, safe_name, save_summary, summarize, summarize_vol)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -178,7 +178,7 @@ def test_run_keeps_going_when_one_stock_fails(monkeypatch, capsys):
 # ---------------------------- templates ------------------------------------
 
 @pytest.mark.parametrize("name, names", [
-    ("template.ipynb", ["TICKER", "START", "FIRST_TEST_YEAR", "COST", "CASH_INTEREST"]),
+    ("template.ipynb", ["TICKER", "START", "FIRST_TEST_YEAR", "COST", "CASH_INTEREST", "RUN_LSTM"]),
     ("comparison_template.ipynb", ["TICKERS"]),
 ])
 def test_template_has_a_parameters_cell(name, names):
@@ -416,3 +416,79 @@ def test_template_tests_both_parts_over_the_same_years():
     source = "\n".join(c.source for c in nbformat.read(ROOT / "notebooks" / "template.ipynb", as_version=4).cells)
     assert "vol_first_year = FIRST_TEST_YEAR" in source
     assert "first_test_year(vol_data)" not in source
+
+
+
+# ---------------------------- phase 5: the LSTM (no PyTorch needed here) ----------------------------
+
+def _fake_lstm_preds():
+    days = pd.bdate_range("2020-01-01", periods=6)
+    target = pd.Series([1, 0, 1, 1, 0, 0], index=days)
+    lstm = pd.DataFrame({"prob": [0.6, 0.4, 0.6, 0.4, 0.4, 0.6],
+                         "prob seed 0": [0.7, 0.3, 0.6, 0.4, 0.45, 0.6],
+                         "prob seed 1": [0.5, 0.5, 0.6, 0.4, 0.35, 0.6]}, index=days)
+    lstm["pred"] = (lstm["prob"] > 0.5).astype(int)          # 1 0 1 0 0 1
+    logreg = pd.DataFrame({"pred": [1, 1, 0, 0, 0, 0]}, index=days)
+    return {"LSTM": lstm, "Logistic regression": logreg}, target
+
+
+def test_lstm_vs_logreg_by_hand():
+    preds, target = _fake_lstm_preds()
+    r = lstm_vs_logreg(preds, target)
+    # they disagree on days 2, 3, 6: the LSTM is right on 2 and 3, logistic regression on 6
+    assert r["days they disagree"] == 3
+    assert (r["LSTM right"], r["logistic regression right"]) == (2, 1)
+    assert r["LSTM accuracy"] == pytest.approx(4 / 6)
+    assert r["logistic regression accuracy"] == pytest.approx(3 / 6)
+    assert r["p-value"] == pytest.approx(0.5)               # 2 or more wins of 3 by coin flips
+    # seed 0 says 0.5 on day 2 (class 0) and seed 1 says 0.5 on day 1: they disagree on day 1 only
+    assert r["seeds"] == 2 and r["days all seeds agree"] == pytest.approx(5 / 6)
+
+
+def test_summary_adds_the_lstm_comparison_only_when_the_lstm_ran():
+    data = build_dataset(make_random_walk(n_days=1800, seed=6))
+    test = data[data.index.year >= 2010]
+    lr = walk_forward(get_models()["Logistic regression"], data, 2010)
+    fake_lstm = lr.assign(**{"prob seed 0": lr["prob"]})
+    without = summarize("X", test, {"Logistic regression": lr}, luck_trials=5)
+    with_lstm = summarize("X", test, {"Logistic regression": lr, "LSTM": fake_lstm}, luck_trials=5)
+    assert "LSTM vs logistic regression" not in without
+    assert with_lstm["LSTM vs logistic regression"]["days they disagree"] == 0
+    assert "LSTM" in with_lstm["models"]
+
+
+def test_lstm_comparison_table():
+    assert lstm_comparison([_summary("A", [0.5], [0.5])]) == (None, None)
+    s = _summary("A", [0.5], [0.5])
+    s["LSTM vs logistic regression"] = {"LSTM accuracy": 0.55, "logistic regression accuracy": 0.54,
+                                        "days they disagree": 300, "LSTM right": 160, "logistic regression right": 140,
+                                        "p-value": 0.01, "days all seeds agree": 0.9}
+    s["volatility"] = _vol_block([0.5], [0.5])
+    s["volatility"]["LSTM vs logistic regression"] = {**s["LSTM vs logistic regression"], "p-value": 0.04}
+    table, info = lstm_comparison([s])
+    assert info["comparisons"] == 2
+    # Holm: 0.01 must clear 0.025, then 0.04 must clear 0.05: both pass
+    assert table["LSTM better (corrected)?"].all()
+    assert table.loc[("A", "direction"), "edge"] == pytest.approx(0.01)
+
+
+def test_run_lstm_option(monkeypatch, capsys):
+    import src.lstm
+    seen = []
+    monkeypatch.setattr(run, "run_notebook", lambda template, output, parameters: seen.append(parameters))
+    monkeypatch.setattr(src.lstm, "torch_available", lambda: True)
+    run.main(["SPY", "--no-comparison", "--lstm"])
+    run.main(["SPY", "--no-comparison"])
+    assert [p["RUN_LSTM"] for p in seen] == [True, False]
+    # without PyTorch, --lstm stops at once with a clear message
+    monkeypatch.setattr(src.lstm, "torch_available", lambda: False)
+    assert run.main(["SPY", "--lstm"]) == 1
+    assert "pip install -r requirements-lstm.txt" in capsys.readouterr().out
+    assert len(seen) == 2
+
+
+def test_lstm_says_how_to_install_pytorch(monkeypatch):
+    import src.lstm
+    monkeypatch.setattr(src.lstm, "torch_available", lambda: False)
+    with pytest.raises(ImportError, match="requirements-lstm.txt"):
+        src.lstm.require_torch()

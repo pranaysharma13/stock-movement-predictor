@@ -37,7 +37,8 @@ Stock_Movement_Predictor/
 │   ├── features.py              features and labels for both tasks
 │   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
 │   ├── report.py                per-stock summaries and the cross-stock comparison
-│   └── forward.py               the forward test: predictions, outcomes, scorecard
+│   ├── forward.py               the forward test: predictions, outcomes, scorecard
+│   └── lstm.py                  the optional LSTM (needs PyTorch)
 ├── notebooks/
 │   ├── template.ipynb           the analysis for one stock, both parts (run.py fills in the ticker)
 │   └── comparison_template.ipynb  the side-by-side comparison
@@ -54,7 +55,8 @@ Stock_Movement_Predictor/
 ├── pytest.ini                   test settings
 ├── requirements.txt
 ├── requirements-lock.txt        the exact library versions the reports were made with
-└── requirements-forward.txt     the few libraries the daily job needs
+├── requirements-forward.txt     the few libraries the daily job needs
+└── requirements-lstm.txt        PyTorch, only for the optional LSTM
 ```
 
 The logic lives in `src/` as small, plain functions. The notebooks import them and tell the story.
@@ -102,6 +104,7 @@ Open a finished report in VS Code or with `jupyter notebook reports/NVDA.ipynb`.
 | `--no-comparison` | off | Skip the comparison when running several stocks |
 | `--comparison-only` | off | Don't re-run the stocks; rebuild the comparison from their saved summaries |
 | `--no-interest` | off | Cash earns nothing in the backtests (by default it earns the Treasury-bill rate) |
+| `--lstm` | off | Add the LSTM as a third model (needs PyTorch; adds several minutes per stock) |
 
 ### Every time you come back
 
@@ -120,6 +123,19 @@ Edit `notebooks/template.ipynb` (or the code in `src/`), then run `python run.py
 If you download before 6 pm New York time, today's row is left out automatically, because its prices may still change after the 4 pm close. Rows where High and Low don't contain Open and Close (an occasional glitch in Yahoo's data) are repaired, and each report lists them.
 
 Tickers without trading volume, such as `^VIX` or currency pairs, stop with a clear message: one of the features needs volume.
+
+## The optional LSTM
+
+An LSTM is a neural network that reads a sequence in order. Here it sees the last 60 trading days, three numbers per day: the day's return and its high-to-low swing (both relative to the stock's typical move) and its volume ratio. Unlike the other models, it gets no summary features: it has to find patterns in the raw days itself.
+
+It's tested exactly like the other models: walk-forward by year, the last training day left out, and its inputs scaled using the training years only. Each year it trains twice. First it learns on all training years but the last, stopping when its loss on that last year stops improving. Then it retrains on all training years for the number of epochs that worked best. That's repeated with 3 random seeds, whose probabilities are averaged, and the report shows how often the seeds agree.
+
+```bash
+pip install -r requirements-lstm.txt        # once: PyTorch, a large download
+python run.py SPY NVDA AAPL GOOGL --lstm    # several minutes per stock
+```
+
+With `--lstm`, the LSTM appears as a third model in every table, backtest, luck check and pipeline check, and each report and the comparison gain a section testing it against logistic regression (paired test, with the Holm correction in the comparison). It isn't part of the live forward test.
 
 ## The live forward test
 
@@ -159,8 +175,9 @@ It takes a few seconds and needs no internet: every test runs on small fake pric
 | `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series; clear errors for prices without volume or with too little history |
 | `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
 | `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
-| `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; the log only grows, and the safety check refuses edited predictions or outcomes; two evenings and a holiday in a row work end to end; one failed download doesn't stop the others; downloads are retried |
-| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only` and `--no-interest` work; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
+| `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise |
+| `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; the log only grows, and the safety check refuses edited predictions or outcomes; two evenings and a holiday in a row work end to end; one failed download doesn't stop the others; downloads are retried; its predictions on fixed fake prices are unchanged since it started, and it doesn't depend on the LSTM |
+| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs |
 
 The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report): each one makes at least one test fail.
 

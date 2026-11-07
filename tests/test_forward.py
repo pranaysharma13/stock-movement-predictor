@@ -271,4 +271,39 @@ def test_workflow_runs_every_weekday_evening_and_can_commit():
     assert "contents: write" in text
     assert "python forward_test.py" in text
     assert "git add forward_test/" in text
+
+
+# ---------------------------- the models must not change mid-test ------------------------------------
+
+@pytest.mark.parametrize("make, seed, dir_prob, size_prob", [
+    ("random walk", 21, 0.5147846805683128, 0.4394661391504726),
+    ("clusters", 22, 0.5132554644863383, 0.457840335752881),
+])
+def test_forward_test_predictions_are_unchanged(make, seed, dir_prob, size_prob):
+    """Recorded on 6 Nov 2026, when the forward test started.
+
+    The forward test is only honest if the models making its predictions stay
+    the same throughout. If a later change to the features, the models or the
+    forward-test code alters these numbers, this fails: decide deliberately,
+    and log it, before changing anything the forward test depends on.
+    """
+
+    from src.data import make_volatility_clusters
+    prices = make_random_walk(n_days=1500, seed=seed) if make == "random walk" else \
+        make_volatility_clusters(n_days=1500, seed=seed)
+    row = predict_today(prices, "X", code_version="v", recorded_at="t")
+    assert row["dir_prob"] == pytest.approx(dir_prob, abs=1e-6)
+    assert row["size_prob"] == pytest.approx(size_prob, abs=1e-6)
+    assert row["trained_through"] == "2010-09-30"
+
+
+
+def test_forward_test_doesnt_depend_on_the_lstm():
+    """The LSTM is optional and separate: the forward test's code must not import it,
+    and the models it uses are still exactly the two original ones."""
     
+    from src.evaluate import get_models
+    for name in ["forward.py", "evaluate.py", "features.py", "data.py"]:
+        assert "lstm" not in (ROOT / "src" / name).read_text().lower()
+    assert "lstm" not in (ROOT / "forward_test.py").read_text().lower()
+    assert list(get_models()) == ["Logistic regression", "Gradient boosting"]

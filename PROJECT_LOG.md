@@ -1,6 +1,6 @@
 # Stock Movement Predictor — Project Log
 
-*Last updated: 6 November 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude (Anthropic's AI assistant).*
+*Last updated: 6 November 2026. A running record of decisions, results, issues and lessons, kept up to date with the help of Claude.*
 
 ## Overview
 
@@ -8,7 +8,7 @@ No model predicts tomorrow's direction better than "always predict up" on any of
 
 - **Goal:** predict whether a stock closes higher tomorrow, using only information available at today's close, and test the answer honestly.
 - **Approach:** daily prices from 2005 to today for SPY, NVDA, AAPL and GOOGL; two tasks (direction, and big vs. small moves) with 5 price-based features each; two models (logistic regression and gradient boosting); walk-forward testing from 2010; compared against simple baselines, a backtest with trading costs, a luck check and a lucky-winners correction across stocks.
-- **Status:** phases 1–4.2 and 6 are built: fixes, 124 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Phase 4.2 fixed the findings of an independent code review: four bugs, consistent statistics (paired tests everywhere, the Holm correction) and interest on cash. Phase 6, the live forward test, records each weekday's predictions on GitHub from the day it's switched on. Next: phase 5 (LSTM).
+- **Status:** phases 1–6 are built: fixes, 141 automated tests, and one-command reports (`python run.py`) for any stock, with a cross-stock comparison. Phase 4 added a second task, big vs. small moves; phase 4.1 added the tougher Recent swing baseline, a paired test, and a weekly version of the strategy. Phase 4.2 fixed the findings of an independent code review: four bugs, consistent statistics (paired tests everywhere, the Holm correction) and interest on cash. Phase 5 added an optional LSTM, a neural network reading the last 60 days (`--lstm`). Phase 6, the live forward test, records each weekday's predictions on GitHub. Next: a four-stock run with the LSTM, then phase 7 (write-up).
 - **Code:** logic lives in `src/`; `notebooks/template.ipynb` is the analysis for one stock; `run.py` saves finished reports in `reports/`.
 
 This log is updated whenever we find an issue, fix one or add a feature. The Changelog at the end lists every change, newest first.
@@ -27,7 +27,8 @@ Every choice below was made to keep the test honest: no peeking at the future, a
 | Running reports | `python run.py SPY NVDA AAPL GOOGL` runs each report with papermill, then the comparison; a failed ticker doesn't stop the others | One command instead of editing and re-running a notebook per stock |
 | Reports on GitHub | Yes, saved with all tables and charts; price data stays out | Visitors see results without running anything |
 | Features | 8 calculated; the models use 5: `ret_1d`, `ret_5d`, `dist_ma50`, `vol_20d`, `volume_ratio` | One per idea (momentum, trend, risk, activity); `ret_10d`, `ret_20d` and `dist_ma10` nearly duplicate kept ones |
-| Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable; LSTM comes in phase 5 |
+| Models | Logistic regression (features scaled first) and gradient boosting (shallow trees: depth 3, learning rate 0.05, 200 trees), both from scikit-learn | Start simple and readable |
+| LSTM (optional, phase 5) | One LSTM layer of 32 units reading the last 60 days: return and high-to-low swing (both relative to the typical move) and volume ratio; inputs scaled on training years only and clipped at ±8; each year, early stopping on the validation loss of the last training year, then a retrain on all training years for the best epoch count; 3 seeds averaged; PyTorch, CPU | Tests whether reading the raw sequence finds what five summary features miss; small, because a few thousand training days would overfit a big network; seeds show how stable it is |
 | Testing | Walk-forward: train on all years before the test year, predict it, step forward; the last training day is left out, because its label is the first test day's move; first test year = first year with at least 1,000 trading days (about 4 years) before it, 2010 for these stocks, the same for both parts | Every prediction comes from a model that never saw that year, not even one price from it; works for stocks with shorter histories |
 | Baselines | Coin flip, always up, repeat last move | Stocks rise on more than half of days, so "always up" is the real bar, not 50% |
 | Noise check | 95% range around each accuracy, a p-value against a coin flip, and a paired p-value against the baseline ("always up" or a rule) | Shows whether a difference could be luck; the paired test only counts days where model and baseline disagree |
@@ -126,6 +127,22 @@ In the comparison, Part 2 now shows two edge charts (against "same as today", th
 ## Results so far
 
 Move size is predictable on all four stocks; direction is not. On SPY, though, the models predict move size no better than the one-line Recent swing rule; on single stocks, logistic regression beats it by a small margin. No model beats "always up" on any of the four stocks, and on single stocks every direction model loses to buy-and-hold. SPY's borderline backtest edge from phase 1 didn't replicate on NVDA, AAPL or GOOGL. Newest results come first; earlier ones are kept below for comparison.
+
+### After phase 5: SPY with the LSTM
+
+Run by Claude on the saved SPY CSV on 7 November 2026, without interest on cash (rates can't be downloaded in Claude's workspace); test period 4 January 2010 to 7 October 2026 (4,216 days). The four-stock run with the LSTM still needs to be made locally.
+
+| Task | LSTM | Logistic regression | Baseline | LSTM vs baseline (paired p) | LSTM vs logistic regression: days right when they disagree | p-value | Seeds agree |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Direction | 55.1% | 55.1% | 55.2% (always up) | 0.83 | 42 vs 42 | 0.54 | 99.0% of days |
+| Move size | 63.1% | 61.7% | 61.6% (Recent swing) | 0.033 | 342 vs 283 | 0.010 | 92.2% of days |
+
+- **Direction: nothing, as before.** The LSTM predicts "up" on 99.3% of days, so it has learned "always up". Its backtest earns 13.8% a year, against 14.2% for buy-and-hold.
+- **Move size: the first model to beat the Recent swing rule on SPY,** where logistic regression and gradient boosting tied it. On the 625 days the LSTM and logistic regression disagree, the LSTM is right on 342.
+- **But this one result isn't clean evidence.** Under the first version of early stopping (validation accuracy), the LSTM scored 61.9% on SPY move size, a tie. The switch to validation loss was made because the LSTM failed a fake-price check, not because of SPY, but SPY's earlier number had already been seen (issue 40). NVDA, AAPL and GOOGL haven't been seen by the LSTM under either rule, so the four-stock run is the real test.
+- **Pipeline checks** (fake prices as long as SPY's): pure noise 49.5% (always up 50.3%) and constant volatility 50.4%: nothing found. Planted reversal 57.8%: found. Clustered volatility 56.5%: it beats "same as today" (54.3%) but not the Recent swing rule (55.3%), while logistic regression does (58.1%). So on fake clustered prices the LSTM is weaker than logistic regression, the opposite of SPY.
+- **Strategy:** half-on-big with the LSTM reaches a Sharpe ratio of 0.85 daily and 0.86 weekly, level with buy-and-hold's 0.86 (no interest); the daily version's worst drop is −18.6%, against −33.7%. Its daily and weekly versions are close because its predictions change less often. Luck shares 0.37 and 0.34: no evidence.
+- **On a fake stock with clustered volatility** (used only to check the comparison page), the LSTM "beat" logistic regression on direction at 5% (p = 0.037), where there is nothing to find, and its seeds agreed on only 50% of days. It didn't survive the Holm correction: an example of the lucky passes the correction exists for.
 
 ### After phase 4.2: four stocks, with interest on cash
 
@@ -344,10 +361,12 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Thirty-nine issues so far: thirty-six fixed or worked around, one planned for a later phase, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
+Forty-one issues so far: thirty-nine fixed or worked around, and two that turned out not to be bugs. Issues 23–37 come from an independent review of the code by a separate Claude Code session run locally. Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
+| 41 | In the comparison charts, a bar could just touch zero while its p-value was below 0.05 (SPY's LSTM against Recent swing: p = 0.033, with a range reaching just below zero) | 7 Nov 2026 | Fixed | Not a contradiction: the ranges are two-sided, the p-values one-sided (is the model better?). The comparison page now says so |
+| 40 | Early stopping on validation accuracy often stopped the LSTM after 1–2 epochs, and a small LSTM then failed to find the planted reversal pattern (50.4% accuracy where 60% was possible) | 7 Nov 2026 | Fixed | Stopping on validation loss instead, the standard choice, which changes smoothly: 55.5–60.5% on the planted pattern. Decided on fake prices, but after seeing SPY's move-size result under the old rule (61.9%); with the new rule it is 63.1%, so that one result is not clean evidence (see Results) |
 | 39 | The first forward-test run warned that `actions/checkout@v4` and `actions/setup-python@v5` are built for Node.js 20, which GitHub is retiring | 6 Nov 2026 | Fixed | Workflow moved to `actions/checkout@v5` and `actions/setup-python@v6`. A notice that `ubuntu-latest` moves to Ubuntu 26 needs no change: Python and the libraries are pinned |
 | 38 | The phase 6 plan said about a year of forward testing could confirm or rule out move-size edges of 1.5 to 2.5 points | 6 Nov 2026 | Fixed | Worked out while writing the scorecard: model and rule agree on about 4 days in 5, so only the rest carry evidence, and an edge that size needs about 1,400 to 3,800 scored days, roughly 1.5 to 4 years with all four stocks together. A year can catch a large edge or rule one out. The scorecard, README and this log now say so |
 | 37 | Small inconsistencies: cache file names didn't use the safe ticker name; `walk_forward`'s column was called `prob_up` even for big days; missing predictions were silently counted as wrong; trailing spaces; no way to rebuild only the comparison | 16 Oct 2026 | Fixed | Phase 4.2: safe names (`^IRX` → `_IRX_from_…csv`); column renamed `prob`; missing predictions raise an error; `--comparison-only` |
@@ -380,7 +399,7 @@ Thirty-nine issues so far: thirty-six fixed or worked around, one planned for a 
 | 10 | The random-walk check proves the code doesn't invent an edge, but not that it would find a real one | 9 Oct 2026 | Fixed | Planted-pattern check added (phase 1): both models find a 60% reversal pattern |
 | 9 | The last row of downloaded data was an unfinished trading day (9 Oct 2026, volume 14.3M vs about 43M normally), so the 8 Oct label used an unsettled price | 9 Oct 2026 | Fixed | Phase 1: today's row is dropped if downloaded before 4:30 pm New York time, including in existing saved files |
 | 8 | Overlapping features (correlation up to 0.91) made logistic regression's weights unreadable; the first test year was fixed at 2010 | 9 Oct 2026 | Fixed | Phase 1: models use 5 features (all 8 still available); first test year chosen automatically |
-| 7 | No LSTM was built, although the reference repo uses one | 9 Oct 2026 | Proposed | Phase 5, on request only (`RUN_LSTM` switch) |
+| 7 | No LSTM was built, although the reference repo uses one | 9 Oct 2026 | Fixed | Built in phase 5, on request only: `python run.py TICKER --lstm` (`RUN_LSTM`) |
 | 6 | Neither model beats "always up" | 9 Oct 2026 | Not a bug | The finding, not a bug: the data holds no usable signal. Both pipeline checks pass |
 | 5 | Folder name with spaces needs quotes in Terminal and can break the `jupyter` command | 9 Oct 2026 | Fixed | Renamed to `Stock_Movement_Predictor`; README updated |
 | 4 | `.ipynb` files can't be previewed in the Claude app | 9 Oct 2026 | Workaround | Full notebook pasted in chat; open it in Jupyter or VS Code |
@@ -436,6 +455,8 @@ The biggest lesson so far: when a model predicts badly, first ask whether the co
 
 **Small changes can expose a fragile model.** Leaving out 17 training days changed gradient boosting's predictions on 146 days; logistic regression barely moved. A fresh download, with 5 more days and Yahoo's small revisions to old rows, then moved its SPY accuracy by another 0.4 points, while logistic regression stayed put. A model whose output depends on a handful of rows is fitting noise.
 
+**Fix the method before looking, or say when you didn't.** Changing the LSTM's stopping rule was justified by a fake-price test, but it happened after SPY's result under the old rule had been seen, and SPY's number then rose from 61.9% to 63.1%. Every such choice made after seeing results is another chance to fit luck. The honest response is to say so and let fresh data decide: the other three stocks were never seen by the LSTM under either rule.
+
 **Work out how much data a test needs before reading its results.** Planning the forward test, a year sounded like plenty. The arithmetic said otherwise: with model and rule agreeing on most days, a 2-point edge needs several years of new days to stand out from luck. Knowing that up front stops early numbers being over-read in either direction.
 
 **Practical snags:** Claude's workspace can't download market data, the Claude app can't preview notebooks, and spaces in folder names cause Terminal trouble. Each has a workaround in the issue tracker.
@@ -452,7 +473,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [x] **Phase 4, volatility:** predict big vs. small moves, against a "same as today" baseline, in every report
 - [x] **Phase 4.1, a tougher bar:** "Recent swing" baseline, paired test against rules, weekly half-on-big strategy with a weekly luck check
 - [x] **Phase 4.2, review fixes:** four bugs, paired tests and Holm everywhere, interest on cash, data checks
-- [ ] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`RUN_LSTM` switch)
+- [x] **Phase 5, LSTM:** `src/lstm.py` (PyTorch), same walk-forward test, for direction and volatility; on request only (`--lstm`, `RUN_LSTM`)
 - [x] **Phase 6, live forward test:** a GitHub Actions job every weekday after the close logs tomorrow's predictions and checks yesterday's (built 6 Nov 2026; collects data from the day it's switched on)
 - [ ] **Phase 7, write-up:** result charts in the README; Conclusions written
 
@@ -460,7 +481,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Question | Decision |
 | --- | --- |
-| LSTM in every report? | No, on request: `RUN_LSTM = True` at the top of the template |
+| LSTM in every report? | No, on request: `python run.py TICKER --lstm` (`RUN_LSTM`); not in the live forward test |
+| LSTM inputs, seeds and checks | The last 60 days of three raw-ish inputs; 3 seeds averaged; the same four fake-price checks as the other models |
 | Run tests automatically on GitHub? | No; tests run locally with `pytest` |
 | What the live forward test tracks | All four stocks; logistic regression for direction plus logistic regression for move size (best on all four stocks in phase 4), with the Recent swing and "same as today" rules recorded alongside; no LSTM or gradient boosting |
 | Forward test schedule and tools | 23:30 UTC on weekdays; the libraries at the versions in `requirements-lock.txt`; results committed by the job itself |
@@ -476,6 +498,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [ ] From then on, `git pull` before starting work, since the job commits every weekday
 - [x] `git rm --cached .DS_Store`, then commit (issue 35)
 - [x] `pip freeze > requirements-lock.txt`, then commit (issue 36)
+- [ ] Run the LSTM on all four stocks: `pip install -r requirements-lstm.txt`, then `python run.py SPY NVDA AAPL GOOGL --lstm` (roughly 5–12 minutes per stock)
 - [ ] Experiment: `LogisticRegression(max_iter=1000, class_weight="balanced")` in `src/evaluate.py`; guess the outcome before running
 - [ ] Experiment: trade only when the model is confident, e.g. `prob > 0.55`
 - [ ] Write the Conclusions (phase 7)
@@ -487,6 +510,8 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Adjusted prices | Prices corrected for dividends and splits, so day-to-day changes are the real return |
 | Backtest | Replaying a trading rule on past data to see what it would have earned |
 | Baseline | A simple rule a model must beat to show it learned something |
+| Early stopping | Stopping a network's training when its loss on held-out data stops improving, before it starts memorizing noise |
+| Epoch | One pass of training through all the training data |
 | Bonferroni correction | Dividing the 5% threshold by the number of comparisons, so that testing many things doesn't produce lucky "wins" |
 | Excess return | Return above what cash would have earned; the Sharpe ratio uses it |
 | Feature | An input to the model, such as the last 5 days' return |
@@ -496,7 +521,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Holm correction | A step-by-step version of Bonferroni: the smallest p-value must clear 5% / m, the next 5% / (m − 1), and so on, stopping at the first miss; same guarantee, never fewer passes |
 | Label (target) | What the model predicts: 1 for an up day tomorrow, 0 otherwise |
 | Leak (look-ahead) | Future information slipping into features or training, which makes results look better than they could be in real life |
-| LSTM | A neural network built for sequences; needs PyTorch or TensorFlow |
+| LSTM | Long short-term memory: a neural network that reads a sequence in order and keeps a running memory of what it has seen; here, the last 60 trading days |
 | Max drawdown | The worst fall from a peak to a low |
 | McNemar's test (paired test) | Comparing two predictors on the same days by counting only the days they disagree: if they were equally good, each would win about half |
 | Multicollinearity | Features that move together, so a model can split or cancel weight between them |
@@ -506,6 +531,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 | Random walk | Prices where every day's move is pure chance |
 | Recent swing | The one-line move-size rule: predict a big day when today's high-to-low swing was wider than its median over the past 250 trading days |
 | scikit-learn | The Python library that provides the models and data-preparation tools |
+| Seed | The starting number for a program's randomness; a neural network trained with different seeds starts from different random weights and can end up predicting differently |
 | Sharpe ratio | Return above cash per unit of volatility; higher is better |
 | Treasury bill (`^IRX`) | Short-term US government debt; its yield is the standard "risk-free" rate that cash earns |
 | Virtual environment (.venv) | A private set of Python libraries for this project only |
@@ -517,6 +543,7 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 
 | Date | Change | Details |
 | --- | --- | --- |
+| 7 Nov 2026 | Phase 5 built | Optional LSTM: `src/lstm.py`, `requirements-lstm.txt`, `--lstm` in `run.py`, `RUN_LSTM` in the template; the LSTM joins every table, backtest, luck check and pipeline check, plus a paired test against logistic regression in each report and the comparison (Holm-corrected); early stopping switched from validation accuracy to loss (issue 40); the forward test's predictions locked by a test and kept independent of the LSTM; 17 new tests (141 total, 9 skipped without PyTorch), checked by planting 13 bugs (all caught); checked end to end on SPY plus a fake stock, about 12 minutes per stock in Claude's 2-core workspace |
 | 6 Nov 2026 | Forward test switched on | First run (by hand) succeeded in 51 seconds and recorded predictions from the 6 November close; the lock-file versions install fine on GitHub's Linux machines. Workflow updated to `checkout@v5` and `setup-python@v6` (issue 39). Runs every weekday from here on |
 | 6 Nov 2026 | Phase 6 built | Live forward test: `src/forward.py` (predictions, outcomes, append-only log, scorecard), `forward_test.py` (one evening's run, with retries), `.github/workflows/forward-test.yml` (weekdays at 23:30 UTC, commits `forward_test/`), `requirements-forward.txt`; 18 new tests (124 total), checked by planting 12 bugs (1 missed at first because two rules gave the same p-value on the test data, so the data was changed); simulated over 22 evenings on the saved SPY prices. Plan's estimate of how long the test needs corrected (issue 38) |
 | 6 Nov 2026 | Issues 35 and 36 closed | No `.DS_Store` tracked; `requirements-lock.txt` committed |

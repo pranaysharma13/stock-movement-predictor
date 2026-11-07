@@ -46,6 +46,39 @@ def _paired(pred, baseline_pred, target, name):
             f"wins vs {name}": wins, f"losses vs {name}": losses}
 
 
+def lstm_vs_logreg(model_preds, target):
+    """Does the LSTM beat logistic regression on the same days? (paired test)
+
+    model_preds needs "LSTM" (from lstm_walk_forward) and "Logistic regression".
+    Also reports how much the LSTM's random seeds disagree with each other.
+    """
+
+    lstm = model_preds["LSTM"]["pred"].reindex(target.index)
+    logreg = model_preds["Logistic regression"]["pred"].reindex(target.index)
+    wins, losses = paired_counts(lstm, logreg, target)
+    seed_cols = [c for c in model_preds["LSTM"].columns if c.startswith("prob seed")]
+    seeds = model_preds["LSTM"][seed_cols].reindex(target.index)
+    return {
+        "LSTM accuracy": float((lstm == target).mean()),
+        "logistic regression accuracy": float((logreg == target).mean()),
+        "days they disagree": int((lstm != logreg).sum()),
+        "LSTM right": wins,
+        "logistic regression right": losses,
+        "p-value": paired_p_value(lstm, logreg, target),
+        "seeds": len(seed_cols),
+        "days all seeds agree": float(((seeds > 0.5).nunique(axis=1) == 1).mean()) if seed_cols else 1.0,
+        "average spread of seed probabilities": float(seeds.std(axis=1).mean()) if len(seed_cols) > 1 else 0.0,
+    }
+
+
+def _with_lstm(block, model_preds, target):
+    """Add the LSTM-vs-logistic-regression test when both models were run."""
+
+    if "LSTM" in model_preds and "Logistic regression" in model_preds:
+        block["LSTM vs logistic regression"] = lstm_vs_logreg(model_preds, target)
+    return block
+
+
 def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000):
     """Headline numbers for one stock.
 
@@ -91,7 +124,7 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
             "share of random >=": luck_share,
         }
 
-    return {
+    return _with_lstm({
         "ticker": ticker,
         "test start": str(test.index[0].date()),
         "test end": str(test.index[-1].date()),
@@ -105,7 +138,7 @@ def summarize(ticker, test, model_preds, cost=0.001, luck=None, luck_trials=2000
             "max drawdown": float(hold["max drawdown"]),
         },
         "models": models,
-    }
+    }, model_preds, target)
 
 
 def half_on_big(pred):
@@ -163,7 +196,7 @@ def summarize_vol(test, model_preds, baselines, cost=0.001, luck=None, luck_tria
         }
 
     hold = performance(backtest(pd.Series(1, index=test.index), next_ret, cost, cash), cash)
-    return {
+    return _with_lstm({
         "test start": str(test.index[0].date()),
         "test end": str(test.index[-1].date()),
         "test days": int(len(test)),
@@ -175,7 +208,7 @@ def summarize_vol(test, model_preds, baselines, cost=0.001, luck=None, luck_tria
         "same as today strategy": strategy(half_on_big(baselines["Same as today"])),
         "recent swing strategy": both_strategies(baselines["Recent swing"]),
         "models": models,
-    }
+    }, model_preds, target)
 
 
 def save_summary(summary, folder=SUMMARY_DIR):
@@ -348,4 +381,39 @@ def comparison_table(summaries, alpha=0.05, task="direction"):
     }
     if task == "volatility":
         info["same as today passes (corrected)"] = int(table["beats same as today (corrected)?"].sum())
+    return table, info
+
+
+def lstm_comparison(summaries, alpha=0.05):
+    """LSTM against logistic regression, for every stock and task that ran the LSTM.
+
+    Returns (table, info), or (None, None) if no summary has LSTM results.
+    The p-values are the paired tests from lstm_vs_logreg(), corrected with
+    Holm across all the rows together.
+    """
+
+    rows = []
+    for s in summaries:
+        for task, block in [("direction", s), ("move size", s.get("volatility") or {})]:
+            r = block.get("LSTM vs logistic regression")
+            if r is None:
+                continue
+            rows.append({
+                "stock": s["ticker"], "task": task,
+                "LSTM": r["LSTM accuracy"], "logistic regression": r["logistic regression accuracy"],
+                "edge": r["LSTM accuracy"] - r["logistic regression accuracy"],
+                "edge ±": edge_half_width(r["LSTM right"], r["logistic regression right"], s["test days"]),
+                "days they disagree": r["days they disagree"],
+                "LSTM right": r["LSTM right"], "logistic regression right": r["logistic regression right"],
+                "p-value": r["p-value"],
+                "days all seeds agree": r["days all seeds agree"],
+            })
+    if not rows:
+        return None, None
+    table = pd.DataFrame(rows).set_index(["stock", "task"])
+    table["LSTM better (5%)?"] = table["p-value"] <= alpha
+    table["LSTM better (corrected)?"] = holm(table["p-value"], alpha)
+    info = {"comparisons": len(table), "corrected threshold": alpha / len(table),
+            "passes (5%)": int(table["LSTM better (5%)?"].sum()),
+            "passes (corrected)": int(table["LSTM better (corrected)?"].sum())}
     return table, info

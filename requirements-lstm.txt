@@ -1,0 +1,2 @@
+# Only needed for the optional LSTM (python run.py TICKER --lstm). A large download.
+torch

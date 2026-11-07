@@ -5,6 +5,7 @@ Run the full analysis for one or more stocks.
     python run.py SPY NVDA AAPL GOOGL      several    -> one report each, plus reports/comparison.ipynb
     python run.py AAPL --refresh           re-download the latest prices first
     python run.py SPY NVDA --comparison-only   rebuild only the comparison, from saved summaries
+    python run.py NVDA --lstm              add the LSTM (needs PyTorch; several minutes per stock)
 
 Each report is notebooks/template.ipynb with the settings filled in and every
 cell run, saved with its tables and charts. Run `python run.py --help` for all options.
@@ -39,6 +40,8 @@ def parse_args(argv=None):
     parser.add_argument("--no-comparison", action="store_true", help="skip the comparison report")
     parser.add_argument("--comparison-only", action="store_true",
                         help="don't re-run the stocks; rebuild the comparison from their saved summaries")
+    parser.add_argument("--lstm", action="store_true",
+                        help="add the LSTM model (needs PyTorch: pip install -r requirements-lstm.txt)")
     parser.add_argument("--no-interest", action="store_true",
                         help="cash earns nothing in the backtests (default: Treasury-bill interest)")
     args = parser.parse_args(argv)
@@ -93,6 +96,14 @@ def main(argv=None):
     from src.data import CASH_TICKER, load_prices
     from src.report import SUMMARY_DIR, safe_name
 
+    if args.lstm and not args.comparison_only:
+        from src.lstm import torch_available
+        if not torch_available():
+            print("The LSTM needs PyTorch, which isn't installed. Install it with:\n"
+                  "    pip install -r requirements-lstm.txt\n"
+                  "or run without --lstm.")
+            return 1
+
     done, failed = [], []
     if args.comparison_only:
         for ticker in args.tickers:
@@ -120,6 +131,7 @@ def main(argv=None):
                     "FIRST_TEST_YEAR": args.first_test_year,
                     "COST": args.cost,
                     "CASH_INTEREST": not args.no_interest,
+                    "RUN_LSTM": args.lstm,
                 })
             except Exception as error:  # keep going with the other stocks
                 failed.append(ticker)

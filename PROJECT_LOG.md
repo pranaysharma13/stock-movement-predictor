@@ -390,7 +390,7 @@ Adding the three left-out features back changes accuracy by 0.1 points or less, 
 
 ## Issue tracker
 
-Sixty-nine issues so far: sixty-five fixed, worked around or documented, two that turned out not to be bugs, and two open. Issues 23–37 and 43–69 come from two independent reviews of the code by a separate Claude Code session run locally (October and November 2026). Newest first.
+Sixty-nine issues so far: sixty-six fixed, worked around or documented, two that turned out not to be bugs, and one open. Issues 23–37 and 43–69 come from two independent reviews of the code by a separate Claude Code session run locally (October and November 2026). Newest first.
 
 | # | Issue | Found | Status | Fix or decision |
 | --- | --- | --- | --- | --- |
@@ -409,8 +409,8 @@ Sixty-nine issues so far: sixty-five fixed, worked around or documented, two tha
 | 57 | A half position is reset to exactly 50% every day at no cost, although its weight would drift with the price; not listed as a limitation | 7 Nov 2026 | Documented | Added to the README's limitations; changing it would move every past result |
 | 56 | The weekly luck check shuffles weeks of 3 to 5 days, so the random versions' number of half-position days differs slightly from the strategy's (SPY: 1,899 to 1,939 against 1,931) | 7 Nov 2026 | Documented | Noted in the luck check and the README's limitations; the effect is small |
 | 55 | Max drawdown ignored a fall below the starting $1 on the first day | 7 Nov 2026 | Fixed | The running peak starts at $1; no effect on any current result |
-| 54 | PyTorch had no pinned version, so the LSTM results and the phase 5 lock-in test can't be reproduced exactly from the repo | 7 Nov 2026 | Open | Pin the version you used in `requirements-lstm.txt` (command in your tasks) |
-| 53 | The README described LSTM training charts that the committed reports don't have: they were made before phase 5.1 | 7 Nov 2026 | Worked around | The README says so; the charts appear when the reports are re-run with `--lstm` |
+| 54 | PyTorch had no pinned version, so the LSTM results and the phase 5 lock-in test can't be reproduced exactly from the repo | 7 Nov 2026 | Fixed | Pinned to 2.15.0, the version the results were made with, in `requirements-lstm.txt` |
+| 53 | The README described LSTM training charts that the committed reports don't have: they were made before phase 5.1 | 7 Nov 2026 | Fixed | The four reports were re-run with `--lstm` on 7 Nov: every number matches the 6 Nov run, and each report now has its training charts |
 | 52 | Issue 42's example (test year 2025, epoch 1) didn't match the committed animation, which was test year 2026 (issue 51) and stopped at epoch 15 | 7 Nov 2026 | Fixed | Issue 42 now says where its example comes from; the regenerated animation uses 2025 |
 | 51 | `make_lstm_pictures.py` took the unfinished current year as "the latest full year" from mid-October, and downloaded prices when none were saved | 7 Nov 2026 | Fixed | The latest complete year (the current one only from 24 December); without saved prices it says to run `python run.py TICKER` first |
 | 50 | The forward test's "uses only the last close" test couldn't fail: the future rows were cut off before both calls | 7 Nov 2026 | Fixed | The test records what both models are fitted on (up to the day before) and predict from (the last close) |
@@ -565,10 +565,10 @@ The roadmap is agreed: seven phases, built in order, each ending with the change
 - [x] `pip freeze > requirements-lock.txt`, then commit (issue 36)
 - [x] Run the LSTM on all four stocks: `pip install -r requirements-lstm.txt`, then `python run.py SPY NVDA AAPL GOOGL --lstm` (done 6 Nov 2026: about 19 minutes per stock on a MacBook Air, which slows down under long full load)
 - [x] After copying in phase 5.1: `pytest` (153 passed), `python make_lstm_pictures.py`, then commit `docs/`
-- [ ] Before Monday 9 Nov, 23:30 UTC: copy in the review fixes, `python restore_first_written.py --write`, check `git diff forward_test/predictions.csv` (only digits change), commit and push, then delete `restore_first_written.py` (issue 43)
-- [ ] Pin PyTorch: in `requirements-lstm.txt`, replace `torch` with `torch==` and the version `python -c "import torch; print(torch.__version__)"` prints (issue 54)
-- [ ] `python make_lstm_pictures.py` again (now test year 2025), commit `docs/` (issues 51, 52)
-- [ ] To get the training charts into the reports: `python run.py SPY NVDA AAPL GOOGL --lstm` again (about 80 minutes; issue 53)
+- [x] Before Monday 9 Nov, 23:30 UTC: apply the review fixes and restore the rewritten digits (issue 43; done 7 Nov through pull request #1, which also pinned PyTorch)
+- [x] Pin PyTorch: in `requirements-lstm.txt`, replace `torch` with `torch==` and the version `python -c "import torch; print(torch.__version__)"` prints (issue 54)
+- [x] `python make_lstm_pictures.py` again (now test year 2025), commit `docs/` (issues 51, 52)
+- [x] To get the training charts into the reports: `python run.py SPY NVDA AAPL GOOGL --lstm` again (about 80 minutes; issue 53; done 7 Nov, every number unchanged)
 - [ ] Experiment: `LogisticRegression(max_iter=1000, class_weight="balanced")` in `src/evaluate.py`; guess the outcome before running
 - [ ] Experiment: trade only when the model is confident, e.g. `prob > 0.55`
 - [ ] Write the Conclusions (phase 7)

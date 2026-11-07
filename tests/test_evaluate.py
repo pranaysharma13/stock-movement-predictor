@@ -147,6 +147,13 @@ def test_performance_by_hand():
     # $1 -> 1.10 -> 0.55 -> 0.66
     assert stats["total return"] == pytest.approx(0.66 - 1)
     assert stats["max drawdown"] == pytest.approx(0.55 / 1.10 - 1)
+def test_drawdown_counts_a_loss_on_the_first_day():
+    """The running peak starts at the $1 invested: $1 -> 0.50 -> 0.55 is a 50% drop."""
+
+    days = pd.bdate_range("2020-01-01", periods=2)
+    assert performance(pd.Series([-0.5, 0.1], index=days))["max drawdown"] == pytest.approx(-0.5)
+    rising = performance(pd.Series([0.1, 0.1], index=days))
+    assert rising["max drawdown"] == pytest.approx(0.0)
 
 
 def test_luck_check_spots_a_perfect_strategy(noise):

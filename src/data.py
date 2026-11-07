@@ -56,19 +56,26 @@ def safe_name(ticker):
     return re.sub(r"[^A-Za-z0-9._-]", "_", ticker)
 
 
-def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
+def cache_path(ticker, start="2005-01-01"):
+    """Where load_prices() saves a ticker's prices."""
+
+    return DATA_DIR / f"{safe_name(ticker)}_from_{start}.csv"
+
+
+def load_prices(ticker="SPY", start="2005-01-01", refresh=False, save=True):
     """Daily prices for one ticker, adjusted for splits and dividends.
 
     ticker:  any Yahoo Finance symbol, e.g. "SPY", "AAPL", "^GSPC"
     start:   first date to download, "YYYY-MM-DD"
     refresh: True re-downloads (for example to pick up the latest days)
+    save:    False downloads without saving to data/, so the saved prices the
+             reports use stay as they are (the live forward test does this)
 
     Returns a DataFrame indexed by date with Open, High, Low, Close, Volume.
     prices.attrs["repaired days"] lists the days repair_prices() had to fix.
     """
 
-    DATA_DIR.mkdir(exist_ok=True)
-    cache = DATA_DIR / f"{safe_name(ticker)}_from_{start}.csv"
+    cache = cache_path(ticker, start)
 
     if cache.exists() and not refresh:
         prices = pd.read_csv(cache, index_col="Date", parse_dates=True)
@@ -99,7 +106,9 @@ def load_prices(ticker="SPY", start="2005-01-01", refresh=False):
     prices.index.name = "Date"
 
     prices = drop_unfinished_day(prices, datetime.now(timezone.utc))
-    prices.to_csv(cache)
+    if save:
+        DATA_DIR.mkdir(exist_ok=True)
+        prices.to_csv(cache)
     return repair_prices(prices)
 
 
@@ -151,7 +160,10 @@ def load_cash_returns(index, start="2005-01-01", refresh=False):
     """
 
     rates = load_prices(CASH_TICKER, start, refresh)["Close"] / 100 / TRADING_DAYS
-    return cash_returns_on(rates, index)
+    cash = cash_returns_on(rates, index)
+    # Later days reuse the last known rate: the report shows how old it is
+    cash.attrs["last quote"] = str(rates.index[-1].date())
+    return cash
 
 
 def cash_returns_on(daily_rates, index):

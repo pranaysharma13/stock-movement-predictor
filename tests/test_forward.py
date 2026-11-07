@@ -16,8 +16,9 @@ from src.data import make_random_walk
 from src.evaluate import edge_half_width, paired_p_value
 from src.features import make_vol_features
 from src.forward import (COLUMNS, OUTCOME_COLUMNS, PREDICTION_COLUMNS, add_predictions,
-                         check_predictions_unchanged, empty_log, fill_outcomes, load_log,
-                         predict_today, save_log, score_rows, scorecard)
+                         check_predictions_unchanged, check_saved_text, empty_log, fill_outcomes,
+                         load_log, log_text, next_trading_day, predict_today, recorded_too_late,
+                         save_log, score_rows, scorecard)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,18 +30,35 @@ def prices():
 
 # ---------------------------- predictions ------------------------------------
 
-def test_prediction_uses_only_the_last_close_and_earlier(prices):
-    """A prediction made from day k must be the same whatever happens after day k."""
+def test_prediction_uses_only_the_last_close_and_earlier(prices, monkeypatch):
+    """Both models are fitted on days up to the day before the prediction (whose
+    label is the prediction day's close) and predict from the prediction day's row."""
 
-    k = 1200
-    made = predict_today(prices.iloc[:k + 1], "X", recorded_at="t")
-    future = prices.copy()
-    rng = np.random.default_rng(5)
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        future.iloc[k + 1:, future.columns.get_loc(col)] *= rng.uniform(0.5, 1.5, len(future) - k - 1)
-    again = predict_today(future.iloc[:k + 1], "X", recorded_at="t")
-    assert made == again
-    assert made["made_on"] == str(prices.index[k].date())
+    import src.forward
+    real = src.forward.get_models
+    fitted, asked = [], []
+
+    class Recording:
+        def __init__(self, model):
+            self.model = model
+
+        def fit(self, X, y):
+            fitted.append(X.index)
+            self.model.fit(X, y)
+            return self
+
+        def predict_proba(self, X):
+            asked.append(X.index)
+            return self.model.predict_proba(X)
+
+    monkeypatch.setattr(src.forward, "get_models", lambda: {k: Recording(m) for k, m in real().items()})
+    row = predict_today(prices, "X", recorded_at="t")
+    assert len(fitted) == 2 and len(asked) == 2                 # direction and move size
+    for index in fitted:
+        assert index[-1] == prices.index[-2]
+    for index in asked:
+        assert list(index) == [prices.index[-1]]
+    assert row["made_on"] == str(prices.index[-1].date())
 
 
 def test_models_train_only_on_days_whose_outcome_is_known(prices):
@@ -102,16 +120,55 @@ def test_safety_check_refuses_rewritten_outcomes():
     rewritten.loc[0, "up"] = 0
     with pytest.raises(RuntimeError, match="outcomes"):
         check_predictions_unchanged(log, rewritten)
+# Values from the live log that pandas' default CSV parser didn't read back exactly
+FULL_DIGITS = dict(typical_move=0.004943305862969205, dir_prob=0.49568276435249065,
+                   close=677.5800170898438, size_prob=0.3071196413405543)
 
 
 def test_log_round_trip(tmp_path):
-    log, _ = add_predictions(empty_log(), [_row("2026-11-05")])
+    """Full-precision numbers come back exactly, and saving again gives the same text."""
+
+    log, _ = add_predictions(empty_log(), [_row("2026-11-05", **FULL_DIGITS)])
+    log.loc[0, OUTCOME_COLUMNS] = ["2026-11-06", 0.012345678901234567, 1, 0]
     path = tmp_path / "predictions.csv"
-    save_log(log, path)
+    first = save_log(log, path)
     back = load_log(path)
     assert list(back.columns) == COLUMNS
-    check_predictions_unchanged(log, back)            # nothing changes on the way through a CSV
+    for column, value in FULL_DIGITS.items():
+        assert back.loc[0, column] == value                     # exactly, not approximately
+    check_predictions_unchanged(log, back)
+    assert save_log(back, path, before_text=first) == first     # a second save rewrites nothing
     assert load_log(tmp_path / "missing.csv").empty
+def test_saved_text_check_catches_a_change_in_the_last_digit():
+    log, _ = add_predictions(empty_log(), [_row("2026-11-05", **FULL_DIGITS)])
+    before = log_text(log)
+    check_saved_text(before, before)
+    grown, _ = add_predictions(log, [_row("2026-11-06")])
+    check_saved_text(before, log_text(grown))                  # new rows are fine
+    with pytest.raises(RuntimeError, match="predictions were changed"):
+        check_saved_text(before, before.replace("0.004943305862969205", "0.0049433058629692"))
+    with pytest.raises(RuntimeError, match="removed"):
+        check_saved_text(log_text(grown), before)
+    filled = log.copy()
+    filled.loc[0, OUTCOME_COLUMNS] = ["2026-11-06", 0.01, 1, 0]
+    check_saved_text(before, log_text(filled))                 # an empty outcome may be filled in
+    changed = filled.copy()
+    changed.loc[0, "next_ret"] = 0.010000000000000002
+    with pytest.raises(RuntimeError, match="outcomes"):
+        check_saved_text(log_text(filled), log_text(changed))
+
+
+def test_outcome_columns_are_saved_the_same_way_once_every_row_is_filled():
+    """Whole-number outcomes stay "1.0", not "1", even when no row is still waiting."""
+
+    log, _ = add_predictions(empty_log(), [_row("2026-11-05"), _row("2026-11-06")])
+    log.loc[0, OUTCOME_COLUMNS] = ["2026-11-06", 0.01, 1, 0]
+    half = log_text(log)
+    log.loc[1, OUTCOME_COLUMNS] = ["2026-11-09", -0.02, 0, 1]
+    check_saved_text(half, log_text(log))
+    assert ",1.0,0.0" in log_text(log)
+    log["up"], log["big"] = [1, 0], [0, 1]                       # even as whole-number columns
+    check_saved_text(half, log_text(log))
 
 
 # ---------------------------- outcomes ------------------------------------
@@ -192,16 +249,45 @@ def test_score_rows_by_hand():
 
 
 def test_scorecard_before_any_outcomes():
-    assert "No predictions yet" in scorecard(empty_log(), updated_at="now")
+    assert "No predictions yet" in scorecard(empty_log())
     log, _ = add_predictions(empty_log(), [_row("2026-11-06")])
-    text = scorecard(log, updated_at="now")
+    text = scorecard(log)
     assert "No outcomes yet" in text and "1 still waiting" in text
+    assert "Up to the close of 2026-11-06" in text
 
 
 def test_scorecard_with_outcomes_has_both_tasks_and_a_warning():
-    text = scorecard(_scored_log(), updated_at="now")
+    text = scorecard(_scored_log())
     assert "## Direction" in text and "## Move size" in text
     assert "How much to read into this" in text
+    assert "two-sided" in text
+
+
+def test_scorecard_counts_days_per_stock_not_all_four_together():
+    """With 20 scored days for each of 4 stocks: 20 days and about ±22 points, not 80 and ±11."""
+
+    rows = []
+    for ticker in ["AAA", "BBB", "CCC", "DDD"]:
+        for k, d in enumerate(pd.bdate_range("2026-01-05", periods=20)):
+            r = _row(str(d.date()), ticker, dir_pred=k % 2, size_pred=k % 3 == 0)
+            r.update({"outcome_date": "x", "next_ret": 0.0, "up": k % 2, "big": k % 2})
+            rows.append(r)
+    text = scorecard(pd.DataFrame(rows).reindex(columns=COLUMNS))
+    assert "Each stock has at most 20 scored days" in text
+    assert "about ±22 points" in text
+    assert "| All four | 80 |" in text
+
+
+def test_scorecard_shows_small_p_values():
+    log = _scored_log()
+    log = pd.concat([log] * 30, ignore_index=True)              # the same 6 days, 180 times over
+    log["dir_pred"] = log["up"]                                   # a perfect direction model
+    text = scorecard(log)
+    assert "<0.001" in text and "| 0.00 |" not in text
+
+
+def test_scorecard_only_changes_when_the_log_does():
+    assert scorecard(_scored_log()) == scorecard(_scored_log())  # no clock time in it
 
 
 # ---------------------------- a daily run, end to end ------------------------------------
@@ -214,36 +300,92 @@ def _fake_download(monkeypatch, series, fail=()):
             raise RuntimeError(f"Yahoo refused {ticker}")
         return series[ticker]
     monkeypatch.setattr(forward_test, "download", fake)
+def _evening(day):
+    """23:30 UTC on that day: when the scheduled job runs."""
+
+    return pd.Timestamp(f"{day.date()} 23:30", tz="UTC")
 
 
 def test_two_evenings_in_a_row(tmp_path, monkeypatch, capsys):
     a = make_random_walk(n_days=1500, seed=1)
     b = make_random_walk(n_days=1500, seed=2)
+    path = tmp_path / "predictions.csv"
     # evening 1: data up to day 1400
     _fake_download(monkeypatch, {"AAA": a.iloc[:1401], "BBB": b.iloc[:1401]})
-    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)]) == 0
-    log1 = load_log(tmp_path / "predictions.csv")
+    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)], now=_evening(a.index[1400])) == 0
+    text1 = path.read_text()
+    log1 = load_log(path)
     assert len(log1) == 2 and log1["outcome_date"].isna().all()
     # evening 2: one more day; yesterday's outcomes filled, today's predictions added
     _fake_download(monkeypatch, {"AAA": a.iloc[:1402], "BBB": b.iloc[:1402]})
-    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)]) == 0
-    log2 = load_log(tmp_path / "predictions.csv")
+    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)], now=_evening(a.index[1401])) == 0
+    text2 = path.read_text()
+    log2 = load_log(path)
     assert len(log2) == 4
     check_predictions_unchanged(log1, log2)
+    check_saved_text(text1, text2)                               # the first evening's rows, character for character
     first = log2.iloc[0]
     assert first["outcome_date"] == str(a.index[1401].date())
     assert first["next_ret"] == pytest.approx(a["Close"].iloc[1401] / a["Close"].iloc[1400] - 1)
-    assert (tmp_path / "scorecard.md").read_text().startswith("# Forward test scorecard")
-    # evening 3 is a holiday: no new close, so nothing new is added
-    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)]) == 0
-    assert len(load_log(tmp_path / "predictions.csv")) == 4
-    assert "none new" in capsys.readouterr().out
+    card = (tmp_path / "scorecard.md").read_text()
+    assert card.startswith("# Forward test scorecard")
+    # evening 3 is a holiday: no new close, so nothing new is added and no file changes
+    holiday = _evening(a.index[1401] + pd.offsets.BDay(1))
+    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)], now=holiday) == 0
+    assert path.read_text() == text2
+    assert (tmp_path / "scorecard.md").read_text() == card
+    out = capsys.readouterr().out
+    assert "none new" in out and "not recorded" not in out
+
+
+def test_a_run_checks_the_file_on_disk_not_what_it_read(tmp_path, monkeypatch):
+    """Review issue 43: if reading the log ever changed a digit, the run must refuse to
+    save, because it compares against the file's own text."""
+
+    import src.forward
+    a = make_random_walk(n_days=1500, seed=1)
+    _fake_download(monkeypatch, {"AAA": a.iloc[:1401]})
+    assert forward_test.main(["AAA", "--folder", str(tmp_path)], now=_evening(a.index[1400])) == 0
+    before = (tmp_path / "predictions.csv").read_text()
+    real_load = src.forward.load_log
+
+    def misread(path):
+        log = real_load(path)
+        log.loc[0, "dir_prob"] = np.nextafter(log.loc[0, "dir_prob"], 1)  # off in the last digit
+        return log
+
+    monkeypatch.setattr(src.forward, "load_log", misread)
+    _fake_download(monkeypatch, {"AAA": a.iloc[:1402]})
+    with pytest.raises(RuntimeError, match="predictions were changed"):
+        forward_test.main(["AAA", "--folder", str(tmp_path)], now=_evening(a.index[1401]))
+    assert (tmp_path / "predictions.csv").read_text() == before         # nothing was written
+
+
+def test_a_late_run_records_no_prediction(tmp_path, monkeypatch, capsys):
+    """If the evening run failed and is re-run by hand during the next session, the
+    prediction from the previous close is refused: its day has already started."""
+
+    a = make_random_walk(n_days=1500, seed=1)
+    _fake_download(monkeypatch, {"AAA": a.iloc[:1401]})
+    next_day = a.index[1400] + pd.offsets.BDay(1)
+    late = pd.Timestamp(f"{next_day.date()} 10:15", tz="America/New_York")
+    assert forward_test.main(["AAA", "--folder", str(tmp_path)], now=late) == 0
+    assert load_log(tmp_path / "predictions.csv").empty
+    assert "not recorded" in capsys.readouterr().out
+
+
+def test_recorded_too_late_by_hand():
+    friday = pd.Timestamp("2026-11-06")
+    assert not recorded_too_late(friday, pd.Timestamp("2026-11-06 23:30", tz="UTC"))
+    assert not recorded_too_late(friday, pd.Timestamp("2026-11-08 12:00", tz="UTC"))     # the weekend
+    assert not recorded_too_late(friday, pd.Timestamp("2026-11-09 09:29", tz="America/New_York"))
+    assert recorded_too_late(friday, pd.Timestamp("2026-11-09 09:30", tz="America/New_York"))
 
 
 def test_a_failed_download_doesnt_stop_the_others(tmp_path, monkeypatch, capsys):
     a = make_random_walk(n_days=1500, seed=1)
     _fake_download(monkeypatch, {"AAA": a}, fail={"BBB"})
-    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)]) == 1
+    assert forward_test.main(["AAA", "BBB", "--folder", str(tmp_path)], now=_evening(a.index[-1])) == 1
     log = load_log(tmp_path / "predictions.csv")
     assert log["ticker"].tolist() == ["AAA"]
     assert "BBB: FAILED" in capsys.readouterr().out
@@ -252,8 +394,8 @@ def test_a_failed_download_doesnt_stop_the_others(tmp_path, monkeypatch, capsys)
 def test_download_tries_again(monkeypatch):
     calls = []
 
-    def flaky(ticker, start, refresh):
-        calls.append(ticker)
+    def flaky(ticker, start, refresh, save=True):
+        calls.append((ticker, refresh, save))
         if len(calls) < 3:
             raise RuntimeError("rate limited")
         return "prices"
@@ -261,7 +403,21 @@ def test_download_tries_again(monkeypatch):
     import src.data
     monkeypatch.setattr(src.data, "load_prices", flaky)
     assert forward_test.download("SPY", attempts=3, wait=0) == "prices"
-    assert len(calls) == 3
+    assert calls == [("SPY", True, False)] * 3       # fresh prices, never saved over data/
+
+
+def test_downloading_without_saving_leaves_data_alone(tmp_path, monkeypatch):
+    import sys
+    import types
+    import src.data
+    monkeypatch.setattr(src.data, "DATA_DIR", tmp_path)
+    days = pd.bdate_range("2020-01-01", periods=5)
+    frame = pd.DataFrame({c: 1.0 for c in ["Open", "High", "Low", "Close", "Volume"]}, index=days)
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(download=lambda *a, **k: frame))
+    src.data.load_prices("SPY", refresh=True, save=False)
+    assert list(tmp_path.iterdir()) == []
+    src.data.load_prices("SPY", refresh=True)
+    assert [f.name for f in tmp_path.iterdir()] == ["SPY_from_2005-01-01.csv"]
 
 
 def test_workflow_runs_every_weekday_evening_and_can_commit():
@@ -271,6 +427,29 @@ def test_workflow_runs_every_weekday_evening_and_can_commit():
     assert "contents: write" in text
     assert "python forward_test.py" in text
     assert "git add forward_test/" in text
+    assert "git pull --rebase && git push" in text           # never lose an evening to a rejected push
+    assert "for attempt in 1 2 3" in text
+    assert "date -u" not in text                             # named after the close, not the UTC date
+
+
+def _prices_with(days, closes, volumes=None):
+    p = _prices_on(days, closes)
+    if volumes is not None:
+        p["Volume"] = volumes
+    return p
+
+
+def test_next_trading_day_refuses_gaps_and_stale_rows():
+    made_on = pd.Timestamp("2026-04-02")                          # the Thursday before Good Friday
+    ok = _prices_with(["2026-04-02", "2026-04-06"], [100, 101])  # Monday: 4 days, normal
+    assert next_trading_day(ok, made_on) == pd.Timestamp("2026-04-06")
+    gap = _prices_with(["2026-04-02", "2026-04-09"], [100, 101])  # a week later: a day is missing
+    assert next_trading_day(gap, made_on) is None
+    stale = _prices_with(["2026-04-02", "2026-04-03"], [100, 100], volumes=[1.0, 0.0])
+    assert next_trading_day(stale, made_on) is None
+    assert next_trading_day(_prices_with(["2026-04-02"], [100]), made_on) is None
+    log, _ = add_predictions(empty_log(), [_row("2026-04-02")])
+    assert fill_outcomes(log, {"X": gap})["outcome_date"].isna().all()   # left for a later run
 
 
 # ---------------------------- the models must not change mid-test ------------------------------------

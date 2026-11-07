@@ -350,16 +350,20 @@ def comparison_table(summaries, alpha=0.05, task="direction"):
         raise ValueError(f"task must be 'direction' or 'volatility', not {task!r}")
     table = pd.DataFrame(rows).set_index(["stock", "model"])
     n = len(table)
-    n_luck = n * len(luck_columns)
 
     p = table[p_column]
     table["accuracy edge (5%)?"] = p <= alpha
     table["accuracy edge (corrected)?"] = holm(p, alpha)
     if task == "volatility":
         table["beats same as today (corrected)?"] = holm(table["p-value vs same as today"], alpha)
-    # The luck columns are corrected together, as one family
+    # The luck columns are corrected together, as one family. A model that never
+    # left the market has no luck test (NaN): it isn't counted in the family.
     luck_values = np.concatenate([table[c].to_numpy(dtype=float) for c in luck_columns.values()])
-    luck_passed = holm(luck_values, alpha)
+    tested = ~np.isnan(luck_values)
+    n_luck = int(tested.sum())
+    luck_passed = np.zeros(len(luck_values), dtype=bool)
+    if n_luck:
+        luck_passed[tested] = holm(luck_values[tested], alpha)
     for k, (suffix, column) in enumerate(luck_columns.items()):
         table[f"beats luck{suffix} (5%)?"] = table[column] <= alpha
         table[f"beats luck{suffix} (corrected)?"] = luck_passed[k * n:(k + 1) * n]
@@ -388,8 +392,14 @@ def lstm_comparison(summaries, alpha=0.05):
     """LSTM against logistic regression, for every stock and task that ran the LSTM.
 
     Returns (table, info), or (None, None) if no summary has LSTM results.
-    The p-values are the paired tests from lstm_vs_logreg(), corrected with
-    Holm across all the rows together.
+    The p-values are the paired tests from lstm_vs_logreg(). They are corrected
+    two ways, and both are reported:
+      corrected:                Holm across all the rows together, both tasks as one
+                                family. This was the plan when the LSTM was added
+                                (phase 5), before any four-stock result, so it stays
+                                the main result.
+      corrected within its task: Holm within each task, as every other comparison
+                                in the project is corrected (review issue 45).
     """
 
     rows = []
@@ -402,7 +412,7 @@ def lstm_comparison(summaries, alpha=0.05):
                 "stock": s["ticker"], "task": task,
                 "LSTM": r["LSTM accuracy"], "logistic regression": r["logistic regression accuracy"],
                 "edge": r["LSTM accuracy"] - r["logistic regression accuracy"],
-                "edge ±": edge_half_width(r["LSTM right"], r["logistic regression right"], s["test days"]),
+                "edge ±": edge_half_width(r["LSTM right"], r["logistic regression right"], block["test days"]),
                 "days they disagree": r["days they disagree"],
                 "LSTM right": r["LSTM right"], "logistic regression right": r["logistic regression right"],
                 "p-value": r["p-value"],
@@ -413,7 +423,15 @@ def lstm_comparison(summaries, alpha=0.05):
     table = pd.DataFrame(rows).set_index(["stock", "task"])
     table["LSTM better (5%)?"] = table["p-value"] <= alpha
     table["LSTM better (corrected)?"] = holm(table["p-value"], alpha)
+    within = pd.Series(False, index=table.index)
+    for task in table.index.get_level_values("task").unique():
+        rows_of_task = table.index.get_level_values("task") == task
+        within[rows_of_task] = holm(table.loc[rows_of_task, "p-value"], alpha)
+    table["LSTM better (corrected within its task)?"] = within
+    tasks = table.index.get_level_values("task")
     info = {"comparisons": len(table), "corrected threshold": alpha / len(table),
             "passes (5%)": int(table["LSTM better (5%)?"].sum()),
-            "passes (corrected)": int(table["LSTM better (corrected)?"].sum())}
+            "passes (corrected)": int(table["LSTM better (corrected)?"].sum()),
+            "comparisons per task": {t: int((tasks == t).sum()) for t in tasks.unique()},
+            "passes (corrected within its task)": int(within.sum())}
     return table, info

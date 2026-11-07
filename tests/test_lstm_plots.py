@@ -76,3 +76,26 @@ def test_training_charts_draw():
     rng = np.random.default_rng(0)
     fig = plot_confidence(rng.uniform(0.4, 0.6, 500), rng.uniform(0.3, 0.7, 500), "test")
     assert fig.axes[0].get_xlim()[0] >= 0 and fig.axes[0].get_xlim()[1] <= 1
+def test_the_average_keeps_stopped_runs_at_their_last_value():
+    """Review issue 59: two runs, one stopping after 2 epochs. Epoch 3's average uses
+    both runs, the stopped one at its last value, not only the run still going."""
+
+    curves = [{"year": 2015, "seed": s, "best epoch": 1, "final run": [],
+               "validation run": [{"epoch": e + 1, "train loss": 0.7, "validation loss": v} for e, v in enumerate(vals)]}
+              for s, vals in [(0, [0.70, 0.72]), (1, [0.70, 0.66, 0.64])]]
+    fig = plot_learning_curves(curves, "test")
+    average = [line for line in fig.axes[0].lines if line.get_label().startswith("average")][0]
+    # changes since epoch 1: run 0 = 0, +0.02 (kept), run 1 = 0, -0.04, -0.06
+    assert list(average.get_xdata()) == [1, 2, 3]
+    assert list(average.get_ydata()) == pytest.approx([0.0, -0.01, -0.02])
+
+
+def test_the_full_network_keeps_its_captions_apart():
+    """Review issue 67: with all 32 units drawn, the columns are wider apart."""
+
+    weights = {"in": np.ones((32, 3)), "out": np.ones(32)}
+    ax = draw_network(weights=weights)
+    captions = {t.get_text(): t.get_position()[0] for t in ax.texts}
+    assert captions["LSTM layer (32 units)"] - captions["Inputs (3 per day)"] >= 1.4
+    probability = [t for t in ax.texts if t.get_text() == "Probability"][0]
+    assert probability.get_position()[0] > captions["Output"]            # beside the output node, off the lines

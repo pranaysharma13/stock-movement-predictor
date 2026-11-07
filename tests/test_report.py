@@ -91,7 +91,7 @@ def test_safe_name():
 # ---------------------------- comparison ------------------------------------
 
 def test_corrected_bar_is_alpha_divided_by_comparisons():
-    summaries = [_summary("A", [0.01, 0.30], [0.02, 0.5]), _summary("B", [0.004, 0.9], [0.001, None])]
+    summaries = [_summary("A", [0.01, 0.30], [0.03, 0.5]), _summary("B", [0.004, 0.9], [0.001, None])]
     table, info = comparison_table(summaries)
     assert info["comparisons"] == 4
     assert info["corrected threshold"] == pytest.approx(0.05 / 4)
@@ -102,7 +102,9 @@ def test_corrected_bar_is_alpha_divided_by_comparisons():
     assert not table.loc[("A", "model 1"), "accuracy edge (5%)?"]
     assert info["accuracy passes (5%)"] == 2
     assert info["accuracy passes (corrected)"] == 2
-    # luck 0.02 passes at 5% only; 0.001 passes both; None never passes
+    # luck: the model that never left the market (None) has no test and isn't counted,
+    # so 3 tests. Holm's bars 0.0167, 0.025, 0.05: 0.001 passes, 0.03 passes at 5% only
+    assert info["luck comparisons"] == 3
     assert table.loc[("A", "model 0"), "beats luck (5%)?"]
     assert not table.loc[("A", "model 0"), "beats luck (corrected)?"]
     assert table.loc[("B", "model 0"), "beats luck (corrected)?"]
@@ -470,6 +472,34 @@ def test_lstm_comparison_table():
     # Holm: 0.01 must clear 0.025, then 0.04 must clear 0.05: both pass
     assert table["LSTM better (corrected)?"].all()
     assert table.loc[("A", "direction"), "edge"] == pytest.approx(0.01)
+def test_lstm_comparison_is_also_corrected_within_each_task():
+    """Review issue 45: both tasks as one family (the plan from phase 5), and within each task."""
+
+    rows = {"direction": [0.20, 0.30], "move size": [0.0074, 0.0196]}
+    summaries = []
+    for k, ticker in enumerate(["A", "B"]):
+        s = _summary(ticker, [0.5], [0.5])
+        s["volatility"] = _vol_block([0.5], [0.5])
+        s["volatility"]["test days"] = 2000                       # move size has fewer test days
+        for task, block in [("direction", s), ("move size", s["volatility"])]:
+            block["LSTM vs logistic regression"] = {
+                "LSTM accuracy": 0.6, "logistic regression accuracy": 0.58, "days they disagree": 300,
+                "LSTM right": 170, "logistic regression right": 130, "p-value": rows[task][k],
+                "days all seeds agree": 0.9}
+        summaries.append(s)
+    table, info = lstm_comparison(summaries)
+    # one family of 4: 0.0074 must clear 0.0125 (it does), then 0.0196 must clear 0.0167 (it doesn't)
+    assert info["passes (corrected)"] == 1
+    # within move size (2 tests): 0.0074 clears 0.025 and 0.0196 clears 0.05
+    assert table.loc[("A", "move size"), "LSTM better (corrected within its task)?"]
+    assert table.loc[("B", "move size"), "LSTM better (corrected within its task)?"]
+    assert not table.loc[("A", "direction"), "LSTM better (corrected within its task)?"]
+    assert info["passes (corrected within its task)"] == 2
+    assert info["comparisons per task"] == {"direction": 2, "move size": 2}
+    # each task's edge range uses that task's own number of test days
+    from src.evaluate import edge_half_width
+    assert table.loc[("A", "move size"), "edge ±"] == pytest.approx(edge_half_width(170, 130, 2000))
+    assert table.loc[("A", "direction"), "edge ±"] == pytest.approx(edge_half_width(170, 130, 2770))
 
 
 def test_run_lstm_option(monkeypatch, capsys):
@@ -500,3 +530,19 @@ def test_template_draws_the_lstm_training_charts():
                    "draw_network(ax)", "plot_learning_curves(lstm_curves", "plot_learning_curves(vol_lstm_curves",
                    "plot_epochs_chosen(vol_lstm_record", 'plot_confidence(vol_model_preds["LSTM"]["prob"]']:
         assert needed in source, needed
+def test_run_warns_when_the_comparison_leaves_out_saved_summaries(tmp_path, monkeypatch, capsys):
+    """Review issue 68: one stock run alone leaves the comparison stale; two of four rebuild it smaller."""
+
+    import src.report as report_module
+    monkeypatch.setattr(report_module, "SUMMARY_DIR", tmp_path)
+    for ticker in ["SPY", "NVDA", "AAPL", "GOOGL"]:
+        (tmp_path / f"{ticker}.json").write_text("{}")
+    monkeypatch.setattr(run, "run_notebook", lambda template, output, parameters: None)
+    run.main(["SPY"])
+    out = capsys.readouterr().out
+    assert "was not rebuilt" in out and "python run.py AAPL GOOGL NVDA SPY --comparison-only" in out
+    run.main(["SPY", "NVDA"])
+    out = capsys.readouterr().out
+    assert "covers SPY, NVDA only" in out and "AAPL, GOOGL" in out
+    run.main(["SPY", "NVDA", "AAPL", "GOOGL"])
+    assert "Note:" not in capsys.readouterr().out

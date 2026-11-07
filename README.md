@@ -79,10 +79,9 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 pytest                           # optional: check everything works (a few seconds)
-pip freeze > requirements-lock.txt   # optional: record the exact versions you used
 ```
 
-`requirements-lock.txt` lists the exact version of every library. Libraries such as yfinance change often; `pip install -r requirements-lock.txt` recreates exactly the setup the reports were made with.
+`requirements-lock.txt` lists the exact version of every library the reports were made with. Libraries such as yfinance change often; `pip install -r requirements-lock.txt` recreates exactly that setup. Don't regenerate it with `pip freeze` while the forward test runs: the GitHub job installs its libraries at these versions, and a new scikit-learn or pandas in the middle of the test would change the model it is testing.
 
 ### Creating reports
 
@@ -142,16 +141,16 @@ With `--lstm`, the LSTM appears as a third model in every table, backtest, luck 
 
 ![The LSTM: three inputs per day, read one day at a time for 60 days, into 32 memory units and one probability](docs/lstm_network.png)
 
-Each report made with `--lstm` also shows how the LSTM trained, for both tasks: learning curves (validation and training loss, epoch by epoch, for every test year and seed, with the epoch early stopping chose), the number of epochs chosen each year, and how confident its predictions are next to logistic regression's. These charts only draw numbers recorded during training: a test checks that recording them changes no prediction.
+Each report made with `--lstm` (since phase 5.1; reports made earlier don't have these charts until they are re-run) also shows how the LSTM trained, for both tasks: learning curves (validation loss, and the average batch loss during training, epoch by epoch, for every test year and seed, with the epoch early stopping chose), the number of epochs chosen each year, and how confident its predictions are next to logistic regression's. These charts only draw numbers recorded during training: a test checks that recording them changes no prediction.
 
 To see one network learn:
 
 ```bash
-python make_lstm_pictures.py                 # SPY, move size, the latest full test year
+python make_lstm_pictures.py                 # SPY, move size, the latest complete year
 python make_lstm_pictures.py NVDA --year 2020 --task direction
 ```
 
-It trains a single network (one stock, one year, one seed) for every epoch, without stopping early, and saves `docs/lstm_network.png` and `docs/lstm_training.gif`: the weights, blue for positive and orange for negative and thicker the larger, next to the losses, with the epoch early stopping would have chosen. It takes seconds, uses the saved prices, and never touches the reports or the forward test.
+It trains a single network (one stock, one year, one seed) for every epoch, without stopping early, and saves `docs/lstm_network.png` and `docs/lstm_training.gif`: the weights, blue for positive and orange for negative and thicker the larger, next to the losses, with the epoch early stopping would have chosen. It takes seconds, uses the saved prices (run `python run.py TICKER` first if a stock has none), and never touches the reports or the forward test.
 
 ![One network training: its weights epoch by epoch, next to its training and validation loss](docs/lstm_training.gif)
 
@@ -164,7 +163,7 @@ Every backtest above is about the past, and the past can mislead in subtle ways:
 3. trains logistic regression on all history up to today, for direction and for move size, and writes down tomorrow's predictions, with the Recent swing and "same as today" rules for comparison;
 4. updates [`forward_test/scorecard.md`](forward_test/scorecard.md) and commits both files.
 
-Because each day's predictions are committed before the day they predict, the git history proves when they were made. Past predictions are never changed: the code only adds rows and fills in empty outcomes, and refuses to save if anything else changed.
+Because each day's predictions are committed before the day they predict, the git history proves when they were made. Past predictions are never changed: the code only adds rows and fills in empty outcomes, and refuses to save if any old value's text changed, down to the last digit. A prediction is only recorded before the day it predicts opens (a run by hand the next morning records nothing), and an outcome only if the next trading day looks right: at most 5 calendar days later, with trading volume. If the job's push is refused because something else reached `main` first, it pulls and tries again.
 
 **Setting it up (once).** Push the project to GitHub, then in the repository go to **Settings → Actions → General → Workflow permissions**, choose **Read and write permissions** and save. To check it works, open the **Actions** tab, pick **Forward test** and click **Run workflow**. It takes about two minutes.
 
@@ -173,7 +172,7 @@ Because each day's predictions are committed before the day they predict, the gi
 **Reading the scorecard.** Expect early numbers to swing: after 20 days an accuracy is uncertain by about ±20 points. The backtests found move-size edges of 1.5 to 2.5 points, and confirming an edge that size takes roughly 1.5 to 4 years of data with all four stocks together; a year is enough to catch a large edge or rule one out.
 
 **Notes.**
-- `python forward_test.py` also runs on your Mac, for trying it out, but the official record is the one the scheduled job commits: don't commit local results.
+- `python forward_test.py --folder /tmp/forward-try` also runs on your Mac, for trying it out. It downloads its own prices and never touches `data/`. The official record is the one the scheduled job commits, so keep `--folder` pointing outside the project and don't commit local results.
 - If Yahoo refuses a download, the job tries again, then records the other stocks and marks the run as failed; that day is simply missing for that stock.
 - In a public repository, GitHub may pause scheduled jobs after 60 days without activity, and emails you if it does; one click on the Actions tab re-enables it.
 - To stop the forward test, open **Actions → Forward test**, click **⋯** and choose **Disable workflow**.
@@ -191,14 +190,14 @@ It needs no internet: every test runs on small fake price series. Without PyTorc
 | Test file | What it checks |
 |---|---|
 | `test_features.py` | No feature uses future prices, for either task; labels match the next day's real move; the "typical move" and the Recent swing rule use only the past year; known values on simple price series; clear errors for prices without volume or with too little history |
-| `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
-| `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
-| `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise; recording the training for the charts changes no prediction, and predictions on fixed fake prices are unchanged since phase 5; the recorded curves match what training did; the animation shows the real training run, epoch for epoch, and the picture script writes both files |
-| `test_lstm_plots.py` | The network diagram draws every node and line once, with line colour and thickness following the weights; the training charts draw from recorded curves without needing PyTorch |
-| `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; the log only grows, and the safety check refuses edited predictions or outcomes; two evenings and a holiday in a row work end to end; one failed download doesn't stop the others; downloads are retried; its predictions on fixed fake prices are unchanged since it started, and it doesn't depend on the LSTM |
-| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs, and the template draws the LSTM's training charts |
+| `test_data.py` | Today's unfinished row is dropped, including shortly after the close; bad High/Low rows are repaired; saved files, safe file names and the download path work (with a fake yfinance); interest rates become daily rates and report the date of their last quote; downloading without saving leaves `data/` alone; fake prices look right; the planted pattern really reverses about 60% of the time; clustered volatility really clusters and the random walk doesn't |
+| `test_evaluate.py` | Walk-forward never trains on the year it predicts, nor on the day whose label falls in it; default calls work; backtest arithmetic matches hand calculations, including half positions and interest on cash; Sharpe uses returns above cash; a first-day loss counts as a drawdown; the paired test and its range match hand calculations; weekly positions only change at week ends (holiday weeks and the last week included); the luck check works on returns, Sharpe ratio and whole weeks, never reports 0, and gives random versions the same interest; both pipeline checks pass for both tasks |
+| `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise; recording the training for the charts changes no prediction, and predictions on fixed fake prices are unchanged since phase 5; the recorded curves match what training did; the animation shows the real training run, epoch for epoch, and the picture script writes both files, picks a complete year and never downloads |
+| `test_lstm_plots.py` | The network diagram draws every node and line once, with line colour and thickness following the weights; the full 32-unit diagram keeps its captions apart; the training charts draw from recorded curves without needing PyTorch, and their average keeps stopped runs at their last value |
+| `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; outcomes after a suspicious gap or with no volume are left empty; the log only grows, full-precision numbers come back exactly, and the safety checks refuse a changed prediction or outcome, down to the last digit, comparing against the file on disk; a prediction is refused once its day has opened; the scorecard counts days per stock, shows small p-values and changes only when the log does; two evenings and a holiday in a row work end to end, the holiday changing no file; the workflow pulls before it pushes; one failed download doesn't stop the others; downloads are retried; its predictions on fixed fake prices are unchanged since it started, and it doesn't depend on the LSTM |
+| `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation and is corrected both across and within tasks; luck tests that never ran aren't counted; `run.py` warns when the comparison leaves out saved summaries; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs, and the template draws the LSTM's training charts |
 
-The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report): each one makes at least one test fail.
+The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report, a log read back with the last digit changed, a forward-test push without a pull): each one makes at least one test fail.
 
 ## Features
 
@@ -237,4 +236,6 @@ The baselines need no model: "same as today" (big tomorrow if today's move was b
 - Costs are a flat percentage; real costs vary.
 - Daily data only.
 - The daily half-on-big strategy switches between full and half positions often, so its result depends heavily on the assumed trading cost; the weekly version trades about a quarter as often.
+- A half position is reset to exactly 50% every day at no cost. In reality its weight drifts with the price between trades, so keeping it at 50% would cost a little more, especially for the weekly version.
+- The weekly luck check shuffles whole weeks, which have 3 to 5 trading days, so the random versions hold half positions for close to, but not exactly, the strategy's number of days.
 - NVDA, AAPL and GOOGL were chosen knowing they became huge winners, so their buy-and-hold results look good partly in hindsight. Each report says so.

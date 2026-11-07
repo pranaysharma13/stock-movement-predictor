@@ -22,15 +22,16 @@ INPUT_NAMES = {"ret_rel": "Return", "range_rel": "High-low swing", "volume_ratio
 
 # ---------------------------- the network ------------------------------------
 
-def network_positions(n_inputs, n_hidden):
-    """(x, y) of each node: inputs, hidden units and the output, top to bottom."""
+def network_positions(n_inputs, n_hidden, gap=1.0):
+    """(x, y) of each node: inputs, hidden units and the output, top to bottom.
+    gap is the distance between the three columns."""
 
     def column(n):
         return np.linspace(0.5, -0.5, n) if n > 1 else np.zeros(1)
     spread = min(1.5, 0.12 * n_hidden)                    # a few units sit closer together
     return {"inputs": [(0.0, y * 0.45) for y in column(n_inputs)],
-            "hidden": [(1.0, y * spread) for y in column(n_hidden)],
-            "output": [(2.0, 0.0)]}
+            "hidden": [(gap, y * spread) for y in column(n_hidden)],
+            "output": [(2 * gap, 0.0)]}
 
 
 def draw_network(ax=None, inputs=INPUTS, hidden=HIDDEN, window=WINDOW, shown=8, weights=None, scale=None):
@@ -50,7 +51,8 @@ def draw_network(ax=None, inputs=INPUTS, hidden=HIDDEN, window=WINDOW, shown=8, 
     if weights is not None:
         shown = hidden
     shown = min(shown, hidden)
-    pos = network_positions(len(inputs), shown)
+    gap = 1.0 if shown <= 8 else 1.4                     # a tall column needs wider captions apart
+    pos = network_positions(len(inputs), shown, gap)
     radius = 0.045 if shown <= 8 else 0.018
 
     def edge(a, b, w=None, scale=1.0):
@@ -75,20 +77,21 @@ def draw_network(ax=None, inputs=INPUTS, hidden=HIDDEN, window=WINDOW, shown=8, 
 
     for name, (x, y) in zip(inputs, pos["inputs"]):
         ax.text(x - 0.08, y, INPUT_NAMES.get(name, name), ha="right", va="center", fontsize=10)
-    ax.text(2.0, -0.12, "Probability", ha="center", va="top", fontsize=10)
+    out_x = 2 * gap
+    ax.text(out_x + radius + 0.06, 0, "Probability", ha="left", va="center", fontsize=10)   # clear of the lines
 
     top = max(y for _, y in pos["hidden"]) + radius
-    ax.add_patch(FancyArrowPatch((1.07, top + 0.02), (0.93, top + 0.02), connectionstyle="arc3,rad=1.6",
+    ax.add_patch(FancyArrowPatch((gap + 0.07, top + 0.02), (gap - 0.07, top + 0.02), connectionstyle="arc3,rad=1.6",
                                  arrowstyle="-|>", mutation_scale=12, color=BLUE, linewidth=1.3))
-    ax.text(1.0, top + 0.2, f"memory carried from one day to the next, for {window} days",
+    ax.text(gap, top + 0.2, f"memory carried from one day to the next, for {window} days",
             ha="center", va="bottom", fontsize=9.5, color=BLUE)
 
     bottom = min(y for _, y in pos["hidden"]) - radius - 0.12
     unit_note = f"{hidden} units" + (f", {shown} shown" if shown < hidden else "")
-    for x, label in [(0.0, f"Inputs ({len(inputs)} per day)"), (1.0, f"LSTM layer ({unit_note})"),
-                     (2.0, "Output")]:
+    for x, label in [(0.0, f"Inputs ({len(inputs)} per day)"), (gap, f"LSTM layer ({unit_note})"),
+                     (out_x, "Output")]:
         ax.text(x, bottom, label, ha="center", va="top", fontsize=10.5, fontweight="bold")
-    ax.set_xlim(-0.75, 2.4)
+    ax.set_xlim(-0.75, out_x + 0.75)
     ax.set_ylim(bottom - 0.15, top + 0.4)
     ax.set_aspect("equal")
     ax.axis("off")
@@ -124,16 +127,20 @@ def curves_table(curves, run="validation run", column="validation loss"):
 def plot_learning_curves(curves, title):
     """Learning curves for every test year and seed.
 
-    Left: validation loss in the run that picks the number of epochs; right:
-    training loss in the same runs. Each faint line is one year and seed; the
-    bold line is the average over the runs still going at that epoch, and each
-    dot marks the epoch early stopping chose. Losses are shown as the change
-    since epoch 1, so years with different starting losses can share a chart.
+    Left: validation loss in the run that picks the number of epochs, measured
+    at the end of each epoch with dropout off. Right: the training loss of the
+    same runs, the average of the epoch's batch losses while the weights were
+    still changing and dropout was on, so it is not directly comparable with
+    the left. Each faint line is one year and seed, and each dot marks the epoch
+    early stopping chose. The bold line averages every run at every epoch: a run
+    that has stopped keeps its last value, so the later epochs aren't averaged
+    only over the runs that kept improving. Losses are shown as the change since
+    epoch 1, so years with different starting losses can share a chart.
     """
 
     fig, (left, right) = plt.subplots(1, 2, figsize=(11, 4), sharex=True)
     for ax, column, name in [(left, "validation loss", "validation loss (the year held back)"),
-                             (right, "train loss", "training loss")]:
+                             (right, "train loss", "training loss (average batch loss, dropout on)")]:
         table = curves_table(curves, column=column)
         table["change"] = table["loss"] - table.groupby(["year", "seed"])["loss"].transform("first")
         for _, run in table.groupby(["year", "seed"]):
@@ -141,10 +148,10 @@ def plot_learning_curves(curves, title):
             if column == "validation loss":
                 chosen = run[run["epoch"] == run["best epoch"]]
                 ax.plot(chosen["epoch"], chosen["change"], "o", color=ORANGE, markersize=3.5, alpha=0.7)
-        runs = table.groupby(["year", "seed"]).ngroups
-        by_epoch = table.groupby("epoch")["change"]
-        average = by_epoch.mean()[by_epoch.size() >= max(3, runs // 4)]
-        ax.plot(average.index, average.values, color=BLUE, linewidth=2.2, label="average over runs")
+        by_run = table.pivot_table(index=["year", "seed"], columns="epoch", values="change")
+        average = by_run.ffill(axis=1).mean()              # a stopped run keeps its last value
+        ax.plot(average.index, average.values, color=BLUE, linewidth=2.2,
+                label="average (stopped runs keep their last value)")
         ax.axhline(0, color="black", linewidth=0.8)
         ax.set_title(name)
         ax.set_xlabel("epoch")

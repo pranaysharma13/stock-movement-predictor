@@ -346,7 +346,8 @@ def performance(daily_returns, cash_ret=None):
         "annual return": equity.iloc[-1] ** (1 / years) - 1,
         "annual volatility": std * np.sqrt(TRADING_DAYS),
         "Sharpe ratio": excess.mean() / excess_std * np.sqrt(TRADING_DAYS) if excess_std > 0 else np.nan,
-        "max drawdown": (equity / equity.cummax() - 1).min(),
+        # the running peak starts at the $1 invested, so a first-day loss counts too
+        "max drawdown": (equity / np.maximum.accumulate(np.r_[1.0, equity.to_numpy()])[1:] - 1).min(),
     }
 
 
@@ -392,6 +393,9 @@ def luck_check(position, next_ret, cost=0.001, n_trials=2000, seed=0,
             The random versions then reshuffle whole weeks rather than single
             days, so they are reduced for the same number of weeks, like for
             like. The position must be constant within each week block.
+            Weeks have 3, 4 or 5 trading days, so the number of reduced days
+            can differ slightly from the strategy's (for SPY's Recent swing
+            weekly strategy, 1,899 to 1,939 against 1,931): close, not exact.
 
     Returns:
       <metric>:            the strategy's own value

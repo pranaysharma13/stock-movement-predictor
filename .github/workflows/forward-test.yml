@@ -44,7 +44,19 @@ jobs:
           git add forward_test/
           if git diff --cached --quiet; then
             echo "Nothing new to save."
-          else
-            git commit -m "Forward test: $(date -u +%Y-%m-%d)"
-            git push
+            exit 0
           fi
+          # Name the commit after the close the latest predictions came from (New York date)
+          latest=$(python -c "import pandas as pd; print(pd.read_csv('forward_test/predictions.csv')['made_on'].max())" || echo "unknown")
+          git commit -m "Forward test: predictions from the close of $latest"
+          # Something else may have reached main while the job ran (a push of your own):
+          # bring it in first, so this evening's predictions are never lost
+          for attempt in 1 2 3; do
+            if git pull --rebase && git push; then
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt of 3); trying again in 20 seconds"
+            sleep 20
+          done
+          echo "Could not save this evening's predictions: run the workflow again by hand before tomorrow's open"
+          exit 1

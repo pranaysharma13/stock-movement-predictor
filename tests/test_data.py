@@ -217,3 +217,13 @@ def test_saved_file_is_repaired_when_loaded(tmp_path, monkeypatch):
     loaded = load_prices("SPY", "2005-01-01")
     assert loaded.attrs["repaired days"] == ["2013-01-22"]
     assert loaded.loc["2013-01-22", "High"] == 99.0
+def test_cash_returns_say_how_old_the_last_rate_is(monkeypatch):
+    """Review issue 69: later days reuse the last known rate, so the report shows its date."""
+
+    import src.data
+    quotes = pd.DataFrame({"Close": [5.0, 4.0]}, index=pd.to_datetime(["2026-10-01", "2026-10-02"]))
+    monkeypatch.setattr(src.data, "load_prices", lambda ticker, start, refresh: quotes)
+    days = pd.bdate_range("2026-10-01", periods=10)
+    cash = src.data.load_cash_returns(days)
+    assert cash.attrs["last quote"] == "2026-10-02"
+    assert cash.iloc[-1] == pytest.approx(0.04 / 252)                 # the last rate, carried forward

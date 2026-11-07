@@ -89,6 +89,23 @@ def last_line(error):
 
     lines = str(error).strip().splitlines()
     return lines[-1] if lines else type(error).__name__
+def comparison_note(done, args, summary_dir):
+    """A warning when reports/comparison.ipynb doesn't cover every stock with a saved summary:
+    either it wasn't rebuilt (one stock run on its own), or it was rebuilt from fewer
+    stocks than before, which also changes its correction for testing many things."""
+
+    saved = sorted(f.stem for f in Path(summary_dir).glob("*.json"))
+    covered = done if (len(done) >= (1 if args.comparison_only else 2) and not args.no_comparison) else []
+    missing = [t for t in saved if t not in covered]
+    if not missing or not saved:
+        return None
+    rebuild = f"python run.py {' '.join(saved)} --comparison-only"
+    if not covered:
+        return (f"\nNote: reports/comparison.ipynb was not rebuilt, so it still shows the earlier "
+                f"summaries. To bring it up to date: {rebuild}")
+    return (f"\nNote: the comparison covers {', '.join(covered)} only; saved summaries also exist for "
+            f"{', '.join(missing)}, and with fewer stocks the correction is less strict. "
+            f"To compare all of them: {rebuild}")
 
 
 def main(argv=None):
@@ -156,6 +173,9 @@ def main(argv=None):
         except Exception as error:
             failed.append("comparison")
             print(f"Comparison: FAILED - {last_line(error)}")
+    note = comparison_note(done, args, SUMMARY_DIR)
+    if note:
+        print(note)
 
     if failed:
         print(f"\nDone with problems: {', '.join(failed)} failed.")

@@ -240,3 +240,21 @@ def test_picture_script_writes_both_pictures(tmp_path):
     assert gif.n_frames == 3 + 1                                          # the starting weights, then 3 epochs
     gif.seek(gif.n_frames - 1)
     assert gif.info["duration"] == 3000                                   # the last epoch is held
+def test_latest_full_year_skips_a_part_year():
+    """Review issue 51: data to 5 Nov 2026 must give 2025, not the unfinished 2026."""
+
+    from make_lstm_pictures import latest_full_year
+    assert latest_full_year(pd.bdate_range("2024-01-01", "2026-11-05")) == 2025
+    assert latest_full_year(pd.bdate_range("2024-01-01", "2025-12-31")) == 2025
+    assert latest_full_year(pd.bdate_range("2024-01-01", "2026-01-02")) == 2025
+
+
+def test_picture_script_doesnt_download(tmp_path, monkeypatch, capsys):
+    """Without saved prices it says what to run instead of downloading them."""
+
+    import make_lstm_pictures
+    import src.data
+    monkeypatch.setattr(src.data, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(src.data, "load_prices", lambda *a, **k: pytest.fail("it tried to download"))
+    assert make_lstm_pictures.main(["ZZZ", "--folder", str(tmp_path)]) == 1
+    assert "python run.py ZZZ" in capsys.readouterr().out

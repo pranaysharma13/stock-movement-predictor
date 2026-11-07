@@ -2,7 +2,7 @@
 Pictures of the LSTM for the README (phase 5.1): a diagram of the network, and
 an animation of one network training.
 
-    python make_lstm_pictures.py                 SPY, move size, the latest full test year
+    python make_lstm_pictures.py                 SPY, move size, the latest complete year
     python make_lstm_pictures.py NVDA --year 2020 --task direction
 
 Writes docs/lstm_network.png and docs/lstm_training.gif. Needs PyTorch.
@@ -23,6 +23,7 @@ and it can't change any prediction.
 import argparse
 import sys
 from pathlib import Path
+import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 DOCS = ROOT / "docs"
@@ -33,7 +34,7 @@ def parse_args(argv=None):
     parser.add_argument("ticker", nargs="?", default="SPY", help="stock symbol (default SPY)")
     parser.add_argument("--task", choices=["size", "direction"], default="size",
                         help="move size (default) or direction")
-    parser.add_argument("--year", type=int, help="test year (default: the latest full year)")
+    parser.add_argument("--year", type=int, help="test year (default: the latest complete year)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--start", default="2005-01-01", help="first date of the saved prices")
     parser.add_argument("--folder", type=Path, default=DOCS, help="where the pictures go")
@@ -55,10 +56,11 @@ def early_stopping_epoch(val_losses, patience=3):
 
 
 def latest_full_year(days):
-    """The latest year with at least 200 trading days, so a part year isn't chosen."""
+    """The latest complete year: the last date's year only if the data reaches its
+    last week (24 December or later), otherwise the year before."""
 
-    counts = days.year.value_counts()
-    return int(max(y for y, n in counts.items() if n >= 200))
+    last = days[-1]
+    return int(last.year if last >= pd.Timestamp(year=last.year, month=12, day=24) else last.year - 1)
 
 
 def train_one(prices, task="size", year=None, seed=0, window=None, epochs=None, hidden=None,
@@ -130,7 +132,8 @@ def animate(run, ticker, path, fps=2):
         right.plot(epochs, train, color=GREY, alpha=0.2)
         right.plot(epochs[:k], val[:k], color=BLUE, marker="o", markersize=4,
                    label=f"validation loss ({run['validation year']}, held back)")
-        right.plot(epochs[:k], train[:k], color=GREY, marker="o", markersize=4, label="training loss")
+        right.plot(epochs[:k], train[:k], color=GREY, marker="o", markersize=4,
+                   label="training loss (average batch loss, dropout on)")
         if k >= run["chosen"]:
             right.axvline(run["chosen"], color=ORANGE, linestyle="--", linewidth=1.2,
                           label=f"early stopping would stop here (epoch {run['chosen']})")
@@ -164,7 +167,10 @@ def main(argv=None, prices=None, **train_settings):
     args = parse_args(argv)
     ticker = args.ticker.upper()
     if prices is None:
-        from src.data import load_prices
+        from src.data import cache_path, load_prices
+        if not cache_path(ticker, args.start).exists():
+            print(f"No saved prices for {ticker}. Make them first with: python run.py {ticker}")
+            return 1
         prices = load_prices(ticker, args.start)        # the saved prices; --refresh in run.py updates them
     args.folder.mkdir(parents=True, exist_ok=True)
 

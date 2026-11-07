@@ -1,2 +1,4 @@
 # Only needed for the optional LSTM (python run.py TICKER --lstm). A large download.
-torch
+# Pin it to the version the LSTM results were made with: its numbers, and the test
+# test_predictions_are_unchanged_since_phase_5, depend on the PyTorch version.
+torch==2.15.0

@@ -1,6 +1,8 @@
 # The live forward test: every weekday after the US close, record tomorrow's
 # predictions and fill in yesterday's outcomes, then commit the results.
-# Results: forward_test/predictions.csv and forward_test/scorecard.md
+# Results: forward_test/predictions.csv and forward_test/scorecard.md (logistic regression),
+# forward_test/lstm_predictions.csv and forward_test/lstm_scorecard.md (the LSTM, move size),
+# and the LSTM's monthly models in forward_test/lstm_models/
 name: Forward test
 
 on:
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   forward-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40   # the first evening of a month also retrains the LSTM
     steps:
       - uses: actions/checkout@v5
 
@@ -35,6 +37,20 @@ jobs:
 
       - name: Run the forward test
         run: python forward_test.py
+
+      # The LSTM runs separately: if PyTorch can't be installed or the LSTM fails,
+      # logistic regression's results above are still saved
+      - name: Install PyTorch for the LSTM
+        id: torch
+        if: always()
+        continue-on-error: true
+        # The CPU-only build is far smaller; the version is pinned in requirements-lstm.txt
+        run: pip install -r requirements-lstm.txt -c requirements-lock.txt --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+
+      - name: Run the LSTM forward test
+        if: always() && steps.torch.outcome == 'success'
+        continue-on-error: true
+        run: python forward_test_lstm.py
 
       - name: Save the results
         if: always()   # save what worked, even if one stock failed

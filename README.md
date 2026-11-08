@@ -32,6 +32,7 @@ For the full story (decisions, how to read every output, results, issues found a
 Stock_Movement_Predictor/
 ├── run.py                       one command to create the reports
 ├── forward_test.py              one day of the live forward test (run by GitHub every weekday)
+├── forward_test_lstm.py         the same for the LSTM, move size only (needs PyTorch)
 ├── make_lstm_pictures.py        the LSTM diagram and training animation in docs/ (needs PyTorch)
 ├── src/
 │   ├── data.py                  download and cache prices; fake prices for the pipeline checks
@@ -39,6 +40,7 @@ Stock_Movement_Predictor/
 │   ├── evaluate.py              models, walk-forward testing, baselines, accuracy, backtest, luck check
 │   ├── report.py                per-stock summaries and the cross-stock comparison
 │   ├── forward.py               the forward test: predictions, outcomes, scorecard
+│   ├── forward_lstm.py          the LSTM's forward test: monthly training, predictions, its own scorecard
 │   ├── lstm.py                  the optional LSTM (needs PyTorch)
 │   └── lstm_plots.py            the LSTM's diagram and training charts
 ├── notebooks/
@@ -49,8 +51,11 @@ Stock_Movement_Predictor/
 │   ├── comparison.ipynb
 │   └── summaries/               each stock's headline numbers (used by the comparison)
 ├── forward_test/                written by the daily job
-│   ├── predictions.csv          every prediction, and later its outcome
-│   └── scorecard.md             results so far
+│   ├── predictions.csv          every prediction, and later its outcome (logistic regression)
+│   ├── scorecard.md             results so far
+│   ├── lstm_predictions.csv     the LSTM's move-size predictions and outcomes
+│   ├── lstm_scorecard.md        the LSTM's results so far
+│   └── lstm_models/             the LSTM trained each month, one file per stock
 ├── .github/workflows/forward-test.yml   the schedule
 ├── docs/                        pictures for this README, made by make_lstm_pictures.py
 ├── tests/                       automated checks, run with `pytest`
@@ -165,6 +170,10 @@ Every backtest above is about the past, and the past can mislead in subtle ways:
 
 Because each day's predictions are committed before the day they predict, the git history proves when they were made. Past predictions are never changed: the code only adds rows and fills in empty outcomes, and refuses to save if any old value's text changed, down to the last digit. A prediction is only recorded before the day it predicts opens (a run by hand the next morning records nothing), and an outcome only if the next trading day looks right: at most 5 calendar days later, with trading volume. If the job's push is refused because something else reached `main` first, it pulls and tries again.
 
+**The LSTM in the forward test.** Since phase 6.1, the same job also runs the LSTM, for move size only (direction found nothing to test). It was added because it beat the Recent swing rule on NVDA, AAPL and GOOGL, three stocks it had never been run on. It keeps its own log, [`forward_test/lstm_predictions.csv`](forward_test/lstm_predictions.csv), and scorecard, [`forward_test/lstm_scorecard.md`](forward_test/lstm_scorecard.md), so logistic regression's record and code are untouched, and its scorecard compares it with Recent swing and with logistic regression on the same days.
+
+On the first evening of each month, it trains each stock's LSTM the same way as one year of the walk-forward test: the last year of labelled days held back to choose the number of epochs, then every labelled day for that many epochs, 3 seeds averaged. That takes a few minutes. The trained networks are saved in `forward_test/lstm_models/` and committed, so every prediction can be traced to the exact model that made it; on the other evenings the job only loads them. It runs after logistic regression's step, with the small CPU-only build of PyTorch, and is allowed to fail: if it does, logistic regression's results are still saved. `python forward_test_lstm.py --folder /tmp/forward-try` tries it on your Mac.
+
 **Setting it up (once).** Push the project to GitHub, then in the repository go to **Settings → Actions → General → Workflow permissions**, choose **Read and write permissions** and save. To check it works, open the **Actions** tab, pick **Forward test** and click **Run workflow**. It takes about two minutes.
 
 **Day to day.** The job commits to `main` on its own, so your copy falls behind. Run `git pull` before you start work, or GitHub will refuse your next `git push` until you do.
@@ -195,6 +204,7 @@ It needs no internet: every test runs on small fake price series. Without PyTorc
 | `test_lstm.py` | Skipped if PyTorch isn't installed. The LSTM's inputs never use the future; each sequence is the window ending on its day; scaling uses only training days and clips extreme ones; walk-forward never trains on the test year or the day whose label falls in it; early stopping uses the validation year, never the test year; seeds are averaged and reproducible; it finds a planted pattern and nothing in noise; recording the training for the charts changes no prediction, and predictions on fixed fake prices are unchanged since phase 5; the recorded curves match what training did; the animation shows the real training run, epoch for epoch, and the picture script writes both files, picks a complete year and never downloads |
 | `test_lstm_plots.py` | The network diagram draws every node and line once, with line colour and thickness following the weights; the full 32-unit diagram keeps its captions apart; the training charts draw from recorded curves without needing PyTorch, and their average keeps stopped runs at their last value |
 | `test_forward.py` | Predictions use only data up to the last close, and the models only train on days whose outcome was known; outcomes use the next trading day, even after a holiday, and wait until it has closed; outcomes after a suspicious gap or with no volume are left empty; the log only grows, full-precision numbers come back exactly, and the safety checks refuse a changed prediction or outcome, down to the last digit, comparing against the file on disk; a prediction is refused once its day has opened; the scorecard counts days per stock, shows small p-values and changes only when the log does; two evenings and a holiday in a row work end to end, the holiday changing no file; the workflow pulls before it pushes; one failed download doesn't stop the others; downloads are retried; its predictions on fixed fake prices are unchanged since it started, and it doesn't depend on the LSTM |
+| `test_forward_lstm.py` | The LSTM's forward test trains only on days whose label is known (the prediction day's own inputs are never trained on), with a purged validation year; a saved model predicts exactly like the trained one and averages its seeds; it retrains once a month; a model trained on the prediction day is refused; its log only grows, down to the last digit, against the file on disk; late runs record and train nothing; outcomes are never refilled; the scorecard matches a hand count, per stock, against Recent swing and logistic regression; the workflow runs it after logistic regression and can't let it stop the save |
 | `test_report.py` | Summaries for both tasks are correct and saveable, with each p-value the paired test against the baseline it names; the Holm correction matches hand calculations, is applied to each task separately, and counts daily and weekly strategies; a failed run keeps the last good report; `--comparison-only`, `--no-interest` and `--lstm` work; the LSTM-vs-logistic-regression test matches a hand calculation and is corrected both across and within tasks; luck tests that never ran aren't counted; `run.py` warns when the comparison leaves out saved summaries; `run.py` reads its options and keeps going when one stock fails; both templates have their settings cell and are saved without outputs, and the template draws the LSTM's training charts |
 
 The tests were checked by planting realistic bugs (features that peek at tomorrow, training on the test year, removing the unfinished-day fix, charging half positions as full trades, a baseline that cheats, a paired test that counts agreement days, weekly decisions on the wrong day, training on the day whose label is in the test year, cash that earns nothing, a failed run that overwrites the last good report, a log read back with the last digit changed, a forward-test push without a pull): each one makes at least one test fail.

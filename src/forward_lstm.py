@@ -351,7 +351,7 @@ def scorecard(log, logreg_log=None, models=None):
     single = table[~table["stock"].isin(["All four", "All"])]
     n = int(single["days scored"].max())
     lines += ["", "## How much to read into this", "",
-              f"Each stock has at most {n} scored days, so each accuracy is uncertain by about "
+              f"Each stock has at most {n} scored day{'' if n == 1 else 's'}, so each accuracy is uncertain by about "
               f"±{100 / max(n, 1) ** 0.5:.0f} points. The backtest edge over Recent swing was 1.5 to 3.7 points; "
               "confirming an edge that size takes roughly 1,400 to 3,800 scored days per stock. The p-values "
               "are paired tests, one-sided and not corrected for the four stocks; the ranges are two-sided.", ""]

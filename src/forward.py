@@ -400,7 +400,7 @@ def scorecard(log):
     single = table[~table["stock"].isin(["All four", "All"])]          # each stock, not the pooled row
     n = int(single["days scored"].max())
     lines += ["", "## How much to read into this", "",
-              f"Each stock has at most {n} scored days. An accuracy over n days is uncertain by about "
+              f"Each stock has at most {n} scored day{'' if n == 1 else 's'}. An accuracy over n days is uncertain by about "
               f"±{100 / np.sqrt(max(n, 1)):.0f} points, so early numbers swing a lot. In the backtests, "
               "logistic regression beat the Recent swing rule by 1.5 to 2.5 points on single stocks. "
               "The two agree on about 4 days in 5, so only the other days carry evidence, and telling "

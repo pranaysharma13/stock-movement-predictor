@@ -301,9 +301,9 @@ def _fake_download(monkeypatch, series, fail=()):
         return series[ticker]
     monkeypatch.setattr(forward_test, "download", fake)
 def _evening(day):
-    """23:30 UTC on that day: when the scheduled job runs."""
+    """23:17 UTC on that day: when the scheduled job runs."""
 
-    return pd.Timestamp(f"{day.date()} 23:30", tz="UTC")
+    return pd.Timestamp(f"{day.date()} 23:17", tz="UTC")
 
 
 def test_two_evenings_in_a_row(tmp_path, monkeypatch, capsys):
@@ -422,7 +422,7 @@ def test_downloading_without_saving_leaves_data_alone(tmp_path, monkeypatch):
 
 def test_workflow_runs_every_weekday_evening_and_can_commit():
     text = (ROOT / ".github" / "workflows" / "forward-test.yml").read_text()
-    assert 'cron: "30 23 * * 1-5"' in text
+    assert 'cron: "17 23 * * 1-5"' in text
     assert "workflow_dispatch" in text
     assert "contents: write" in text
     assert "python forward_test.py" in text
@@ -486,3 +486,28 @@ def test_forward_test_doesnt_depend_on_the_lstm():
         assert "lstm" not in (ROOT / "src" / name).read_text().lower()
     assert "lstm" not in (ROOT / "forward_test.py").read_text().lower()
     assert list(get_models()) == ["Logistic regression", "Gradient boosting"]
+
+
+def test_the_scheduled_time_is_after_the_close_in_winter_and_summer():
+    """The job must run after 6 pm New York time all year, or that day's prices count
+    as unfinished, the prediction comes from the day before, and it's refused as late."""
+
+    import re
+    from datetime import datetime, timezone
+
+    from src.data import drop_unfinished_day
+    text = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "forward-test.yml").read_text()
+    minute, hour = map(int, re.search(r'cron: "(\d+) (\d+) \* \* 1-5"', text).groups())
+    for day in ["2026-01-15", "2026-07-15"]:                     # winter (EST) and summer (EDT)
+        prices = _prices_on([day], [100.0])
+        run_at = datetime.fromisoformat(f"{day}T{hour:02d}:{minute:02d}").replace(tzinfo=timezone.utc)
+        assert len(drop_unfinished_day(prices, run_at)) == 1, f"{hour:02d}:{minute:02d} UTC is too early on {day}"
+    assert minute not in (0, 30)                                 # GitHub delays jobs at :00 and :30
+
+
+def test_scorecard_says_day_not_days_for_one():
+    log, _ = add_predictions(empty_log(), [_row("2026-11-06")])
+    log.loc[0, OUTCOME_COLUMNS] = ["2026-11-09", 0.02, 1, 1]
+    text = scorecard(log)
+    assert "at most 1 scored day." in text and "1 scored days" not in text
+

@@ -161,7 +161,7 @@ It trains a single network (one stock, one year, one seed) for every epoch, with
 
 ## The live forward test
 
-Every backtest above is about the past, and the past can mislead in subtle ways: features, stocks and rules were all chosen by people who had seen it. The forward test removes that. Every weekday at 23:30 UTC (6:30 pm New York in winter, 7:30 pm in summer), a GitHub Actions job:
+Every backtest above is about the past, and the past can mislead in subtle ways: features, stocks and rules were all chosen by people who had seen it. The forward test removes that. Every weekday at 23:17 UTC (6:17 pm New York in winter, 7:17 pm in summer), a GitHub Actions job:
 
 1. downloads the latest prices for SPY, NVDA, AAPL and GOOGL;
 2. fills in what actually happened for the previous day's predictions;

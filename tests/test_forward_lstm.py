@@ -29,9 +29,9 @@ def prices():
 
 
 def _evening(day):
-    """23:30 UTC on that day: when the scheduled job runs."""
+    """23:17 UTC on that day: when the scheduled job runs."""
 
-    return pd.Timestamp(f"{day.date()} 23:30", tz="UTC")
+    return pd.Timestamp(f"{day.date()} 23:17", tz="UTC")
 
 
 def _fake_download(monkeypatch, series):
@@ -293,3 +293,11 @@ def test_logistic_regressions_forward_test_still_ignores_the_lstm():
     root = Path(__file__).resolve().parent.parent
     assert "lstm" not in (root / "forward_test.py").read_text().lower()
     assert "lstm" not in (root / "src" / "forward.py").read_text().lower()
+
+
+def test_scorecard_says_day_not_days_for_one():
+    log, _ = fl.add_predictions(fl.empty_log(), [_row("2026-11-06")])
+    log.loc[0, fl.OUTCOME_COLUMNS] = ["2026-11-09", 0.02, 1]
+    text = fl.scorecard(log)
+    assert "at most 1 scored day," in text and "1 scored days" not in text
+

@@ -7,9 +7,10 @@ name: Forward test
 
 on:
   schedule:
-    # 23:30 UTC = 6:30 pm New York in winter, 7:30 pm in summer: after the 6 pm cutoff.
-    # GitHub can start scheduled jobs late at busy times; that's fine here.
-    - cron: "30 23 * * 1-5"
+    # 23:17 UTC = 6:17 pm New York in winter, 7:17 pm in summer: after the 6 pm cutoff in
+    # both seasons (src/data.py treats a day as unfinished before then). An odd minute,
+    # because GitHub starts jobs scheduled on :00 and :30 hours late at busy times.
+    - cron: "17 23 * * 1-5"
   workflow_dispatch:   # the "Run workflow" button, for running it by hand
 
 permissions:

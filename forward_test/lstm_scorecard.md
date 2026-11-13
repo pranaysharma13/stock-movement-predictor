@@ -1,8 +1,8 @@
 # LSTM forward test scorecard (move size)
 
-*Up to the close of 2026-11-11; latest outcome: 2026-11-11. Predictions are written before the day they predict; see `lstm_predictions.csv` and its git history.*
+*Up to the close of 2026-11-12; latest outcome: 2026-11-12. Predictions are written before the day they predict; see `lstm_predictions.csv` and its git history.*
 
-Predictions made from 2026-11-06 to 2026-11-11: 12 scored, 4 still waiting.
+Predictions made from 2026-11-06 to 2026-11-12: 16 scored, 4 still waiting.
 
 | Stock | Model trained in | Trained through | Epochs chosen (each seed) |
 | --- | --- | --- | --- |
@@ -15,22 +15,22 @@ Predictions made from 2026-11-06 to 2026-11-11: 12 scored, 4 still waiting.
 
 | Stock | Days scored | LSTM | Recent swing | Edge | p-value |
 | --- | --- | --- | --- | --- | --- |
-| SPY | 3 | 66.7% | 66.7% | +0.0 ± 0.0 points | 1.000 |
-| NVDA | 3 | 100.0% | 100.0% | +0.0 ± 0.0 points | 1.000 |
-| AAPL | 3 | 66.7% | 66.7% | +0.0 ± 0.0 points | 1.000 |
-| GOOGL | 3 | 66.7% | 0.0% | +66.7 ± 53.3 points | 0.250 |
-| All four | 12 | 75.0% | 58.3% | +16.7 ± 21.1 points | 0.250 |
+| SPY | 4 | 50.0% | 50.0% | +0.0 ± 0.0 points | 1.000 |
+| NVDA | 4 | 100.0% | 100.0% | +0.0 ± 0.0 points | 1.000 |
+| AAPL | 4 | 50.0% | 75.0% | -25.0 ± 42.4 points | 1.000 |
+| GOOGL | 4 | 75.0% | 0.0% | +75.0 ± 42.4 points | 0.125 |
+| All four | 16 | 68.8% | 56.2% | +12.5 ± 23.7 points | 0.312 |
 
 ## Against logistic regression, on the same days
 
 | Stock | Days | LSTM | Logistic regression | p-value |
 | --- | --- | --- | --- | --- |
-| SPY | 3 | 66.7% | 66.7% | 1.000 |
-| NVDA | 3 | 100.0% | 100.0% | 1.000 |
-| AAPL | 3 | 66.7% | 66.7% | 1.000 |
-| GOOGL | 3 | 66.7% | 66.7% | 1.000 |
-| All four | 12 | 75.0% | 75.0% | 1.000 |
+| SPY | 4 | 50.0% | 50.0% | 1.000 |
+| NVDA | 4 | 100.0% | 100.0% | 1.000 |
+| AAPL | 4 | 50.0% | 75.0% | 1.000 |
+| GOOGL | 4 | 75.0% | 50.0% | 0.500 |
+| All four | 16 | 68.8% | 68.8% | 0.750 |
 
 ## How much to read into this
 
-Each stock has at most 3 scored days, so each accuracy is uncertain by about ±58 points. The backtest edge over Recent swing was 1.5 to 3.7 points; confirming an edge that size takes roughly 1,400 to 3,800 scored days per stock. The p-values are paired tests, one-sided and not corrected for the four stocks; the ranges are two-sided.
+Each stock has at most 4 scored days, so each accuracy is uncertain by about ±50 points. The backtest edge over Recent swing was 1.5 to 3.7 points; confirming an edge that size takes roughly 1,400 to 3,800 scored days per stock. The p-values are paired tests, one-sided and not corrected for the four stocks; the ranges are two-sided.
